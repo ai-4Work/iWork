@@ -1,0 +1,35 @@
+# ── 编辑器 / 本地工具目录 ──
+.vscode/
+.idea/
+.claude/
+.cursor/
+
+# ── 操作系统垃圾文件 ──
+.DS_Store
+Thumbs.db
+desktop.ini
+*.stackdump
+
+# ── 本地环境变量（模板 .env.example 要提交）──
+.env
+.env.*
+!.env.example
+
+# ── 日志与运行时产物 ──
+*.log
+logs/
+
+# ── Python ──
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.venv/
+venv/
+
+# ── Node / 构建产物 ──
+node_modules/
+dist/
+out/
