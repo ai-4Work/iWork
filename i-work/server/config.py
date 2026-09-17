@@ -1,10 +1,16 @@
+from pathlib import Path
+
 from pydantic_settings import BaseSettings
+
+# i-work/.env：相对本文件定位，避免 alembic 从 server/ 目录运行时读不到（CWD 相对会解析成 server/.env）
+_ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
 
 
 class Settings(BaseSettings):
     # 环境变量加载规则：所有字段从带 IWORK_ 前缀的变量读取（如 IWORK_MAX_TURNS），
-    # 并加载当前目录 .env；extra="allow" 允许存在未声明的额外变量而不报错。
-    model_config = {"env_prefix": "IWORK_", "env_file": ".env", "extra": "allow"}
+    # 并加载 i-work/.env；优先级 进程环境变量 > .env > 字段默认值。
+    # extra="allow" 允许存在未声明的额外变量而不报错。
+    model_config = {"env_prefix": "IWORK_", "env_file": _ENV_FILE, "extra": "allow"}
 
     # ── LLM 配置（.env文件中配置） ──
     # 选用哪个 LLM 供应商，决定引擎装配哪个客户端
@@ -84,9 +90,10 @@ class Settings(BaseSettings):
     port: int = 8000
 
     # ── 数据库 ──
-    # 异步 SQLAlchemy 连接串（asyncpg 驱动），启动时建连接池
-    # 使用: server/main.py:64（create_engine）、server/db/engine.py:6
-    database_url: str = "postgresql+asyncpg://bmsmart:Bmzt2016_postgres@10.0.60.165:5432/agent_test"
+    # 异步 SQLAlchemy 连接串（asyncpg 驱动），必填，由 IWORK_DATABASE_URL 提供
+    # （本地写在 i-work/.env，参考 .env.example；不入库）。为空则启动直接报错。
+    # 使用: server/main.py:64（create_engine）、server/db/engine.py:6、server/alembic/env.py
+    database_url: str = ""
 
     # ── Hooks ──
     # 是否启用 hooks 机制；false 时不加载任何 hook（钩子链为空）

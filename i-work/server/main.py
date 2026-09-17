@@ -61,6 +61,8 @@ async def lifespan(app: FastAPI):
         ConversationHistoryRepo, UserSkillRepo, UserMcpRepo,
         SkillHubRepo, McpHubRepo,
     )
+    if not settings.database_url:
+        raise RuntimeError("IWORK_DATABASE_URL 未配置：请在 i-work/.env 中设置（参考 .env.example）")
     engine, session_factory = create_engine(settings.database_url)
     app.state.db_session_factory = session_factory
     app.state.db_engine = engine

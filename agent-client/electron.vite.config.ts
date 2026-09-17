@@ -60,6 +60,8 @@ export default defineConfig({
     }
   },
   renderer: {
+    // 默认取渲染进程 root（src/renderer），显式指回项目根，让 agent-client/.env 生效
+    envDir: resolve('.'),
     resolve: {
       alias: {
         '@': resolve('src/renderer/src')

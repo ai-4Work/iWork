@@ -23,7 +23,16 @@ if config.config_file_name is not None:
 # Import all ORM models so autogenerate can detect them
 from server.db.models import Base
 
+from server.config import settings
+
 target_metadata = Base.metadata
+
+# 连接串统一由 server/config.py 提供（值在 i-work/.env），alembic.ini 里的 sqlalchemy.url 留空
+if not settings.database_url:
+    raise RuntimeError("IWORK_DATABASE_URL 未配置：请在 i-work/.env 中设置（参考 .env.example）")
+
+# ConfigParser 会把 % 当作插值起始符，密码含 % 时必须转义
+config.set_main_option("sqlalchemy.url", settings.database_url.replace("%", "%%"))
 
 
 def run_migrations_offline() -> None:

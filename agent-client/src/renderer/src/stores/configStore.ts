@@ -13,7 +13,7 @@ import {
 import { ipcClient } from '../services/ipcClient'
 import { useSettingsStore } from './settingsStore'
 
-const HEFENG_MCP_AK = 'cGk0GDHX5gH3oZazwqcTCg4gQGbjNqux'
+const HEFENG_MCP_AK = import.meta.env.VITE_HEFENG_API_KEY ?? ''
 const HEFENG_API_BASE_URL = 'https://devapi.qweather.com/v7'
 const HEFENG_API_URL = 'https://devapi.qweather.com/v7'
 

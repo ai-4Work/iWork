@@ -1,8 +1,0 @@
-{"event": "2026-07-29T01:57:02.527307Z [warning  ] warning test"}
-{"event": "2026-07-29T01:57:02.628432Z [error    ] error test"}
-{"event": "2026-07-29T01:57:24.953069Z [info     ] info test - should appear"}
-{"event": "2026-07-29T01:57:24.954064Z [warning  ] warning test"}
-{"event": "2026-07-29T02:01:00.690815Z [info     ] GET /skills/hub -> 200  49ms"}
-{"event": "2026-07-29T02:01:00.690815Z [info     ] LLM provider: deepseek  model=deepseek-v4-pro"}
-{"event": "2026-07-29T02:01:00.690815Z [warning  ] mcp.connection_lost  server=my-server  error=timeout"}
-{"event": "2026-07-29T02:01:00.691847Z [info     ] mcp.ready  server=my-server  tools=5"}
