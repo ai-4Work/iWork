@@ -1,0 +1,45 @@
+# Review package: 6e670697bb8bdf52cf9adc386cd56719d7a6e27f..203d23e
+
+## Commits
+203d23e feat: add command store with built-in / commands
+
+## Files changed
+ src/renderer/src/stores/commandStore.ts | 29 +++++++++++++++++++++++++++++
+ 1 file changed, 29 insertions(+)
+
+## Diff
+diff --git a/src/renderer/src/stores/commandStore.ts b/src/renderer/src/stores/commandStore.ts
+new file mode 100644
+index 0000000..3a07ee2
+--- /dev/null
++++ b/src/renderer/src/stores/commandStore.ts
+@@ -0,0 +1,29 @@
++import { create } from 'zustand'
++import type { Command } from '../types'
++
++const BUILTIN_COMMANDS: Command[] = [
++  { id: 'explain', trigger: '/explain', label: '解释代码', description: '解释选中的代码' },
++  { id: 'fix', trigger: '/fix', label: '修复问题', description: '修复代码中的问题' },
++  { id: 'test', trigger: '/test', label: '生成测试', description: '为选中的代码生成测试' },
++  { id: 'refactor', trigger: '/refactor', label: '重构代码', description: '重构选中的代码' }
++]
++
++interface CommandState {
++  commands: Command[]
++  filter: (search: string) => Command[]
++}
++
++export const useCommandStore = create<CommandState>(() => ({
++  commands: BUILTIN_COMMANDS,
++
++  filter: (search: string) => {
++    const q = search.toLowerCase().replace(/^\//, '')
++    if (!q) return BUILTIN_COMMANDS
++    return BUILTIN_COMMANDS.filter(
++      (c) =>
++        c.trigger.toLowerCase().includes(q) ||
++        c.label.toLowerCase().includes(q) ||
++        c.description.toLowerCase().includes(q)
++    )
++  }
++}))

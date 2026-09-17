@@ -1,0 +1,22 @@
+appId: com.agent.electron-app
+productName: Agent Desktop
+directories:
+  output: dist
+  buildResources: resources
+files:
+  - out/**/*
+  - '!out/renderer/src/**'
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  icon: resources/icon.png
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  shortcutName: Agent Desktop
+  installerIcon: resources/icon.ico
+  uninstallerIcon: resources/icon.ico
+  installerHeaderIcon: resources/icon.ico
+npmRebuild: false

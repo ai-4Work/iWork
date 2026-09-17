@@ -1,0 +1,1 @@
+{"event": "StreamSubscriber send failed  type=AgentEventType.MESSAGE_COMPLETE", "exc_info": ["<class 'TypeError'>", "TypeError(\"object NoneType can't be used in 'await' expression\")", "<traceback object at 0x000002B3A470C2C0>"]}

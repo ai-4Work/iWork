@@ -1,0 +1,37 @@
+# Review package: dec7c4d6f1de672f37550492d8a3ca9560eed21b..HEAD
+
+## Commits
+c0774ff feat: add preload script with contextBridge API
+
+## Files changed
+ src/preload/index.ts | 21 +++++++++++++++++++++
+ 1 file changed, 21 insertions(+)
+
+## Diff
+diff --git a/src/preload/index.ts b/src/preload/index.ts
+new file mode 100644
+index 0000000..5b1faa1
+--- /dev/null
++++ b/src/preload/index.ts
+@@ -0,0 +1,21 @@
++import { contextBridge, ipcRenderer } from 'electron'
++
++const api = {
++  file: {
++    glob: (pattern: string) => ipcRenderer.invoke('file:glob', pattern),
++    read: (path: string) => ipcRenderer.invoke('file:read', path),
++    grep: (pattern: string, dirPath: string) => ipcRenderer.invoke('file:grep', pattern, dirPath),
++    write: (path: string, content: string) => ipcRenderer.invoke('file:write', path, content),
++    edit: (path: string, oldStr: string, newStr: string) =>
++      ipcRenderer.invoke('file:edit', path, oldStr, newStr)
++  },
++  workspace: {
++    select: () => ipcRenderer.invoke('workspace:select')
++  },
++  settings: {
++    save: (settings: unknown) => ipcRenderer.invoke('settings:save', settings),
++    load: () => ipcRenderer.invoke('settings:load')
++  }
++}
++
++contextBridge.exposeInMainWorld('electronAPI', api)

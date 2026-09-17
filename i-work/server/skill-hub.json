@@ -1,0 +1,158 @@
+{
+  "skills": [
+    {
+      "skill_id": "sk1-paddleocr-doc-parsing",
+      "skill_name": "paddleocr-doc-parsing",
+      "description": "基于 PaddleOCR 的文档解析与 OCR 识别，支持 110+ 语言，可从 PDF 和图片中提取文本/表格/结构化数据",
+      "folder_path": "paddleocr-doc-parsing",
+      "version": "1.0.0",
+      "category": "文档",
+      "icon": "📷",
+      "author": "iWork Team",
+      "tags": ["ocr", "document", "paddleocr", "image"]
+    },
+    {
+      "skill_id": "sk2-pdf",
+      "skill_name": "pdf",
+      "description": "PDF 文件处理工具：提取文本与表格、合并/拆分、旋转页面、加水印、创建新 PDF、表单填写、加解密、提取图片、扫描件 OCR。用户提及 .pdf 文件或要求产出 PDF 时使用",
+      "folder_path": "pdf",
+      "version": "1.0.0",
+      "category": "文档",
+      "icon": "📄",
+      "author": "iWork Team",
+      "tags": ["pdf", "document", "text-extraction", "ocr"]
+    },
+    {
+      "skill_id": "sk3-docx",
+      "skill_name": "docx",
+      "description": "Word(.docx) 文档处理：创建/读取/编辑文档，生成带目录、标题、页眉页脚、页码的排版文档，插入替换图片、查找替换、修订与批注，或将内容转换为正式 Word 文档。用户提到 Word 文档/.docx 或要求产出报告、备忘录、信件等 Word 交付物时使用",
+      "folder_path": "docx",
+      "version": "1.0.0",
+      "category": "文档",
+      "icon": "📝",
+      "author": "iWork Team",
+      "tags": ["word", "docx", "document"]
+    },
+    {
+      "skill_id": "sk4-pptx",
+      "skill_name": "pptx",
+      "description": "PowerPoint(.pptx) 演示文稿处理：创建幻灯片/演示文稿，读取解析其中文本，编辑修改现有演示，或基于模板制作、拆分合并幻灯片文件。用户提到 deck/slides/演示/演讲或引用 .pptx 文件时使用",
+      "folder_path": "pptx",
+      "version": "1.0.0",
+      "category": "演示",
+      "icon": "📽️",
+      "author": "iWork Team",
+      "tags": ["powerpoint", "pptx", "presentation", "slides"]
+    },
+    {
+      "skill_id": "sk5-xlsx",
+      "skill_name": "xlsx",
+      "description": "Excel(.xlsx/.xlsm/.csv/.tsv) 电子表格处理：创建、读取、编辑、修复表格文件，添加列/公式计算/格式化/图表、清理脏数据、表格格式间转换。交付物需为电子表格文件时使用",
+      "folder_path": "xlsx",
+      "version": "1.0.0",
+      "category": "表格",
+      "icon": "📊",
+      "author": "iWork Team",
+      "tags": ["excel", "xlsx", "spreadsheet", "csv"]
+    },
+    {
+      "skill_id": "sk6-imap-smtp-email",
+      "skill_name": "imap-smtp-email",
+      "description": "通过 IMAP/SMTP 收发邮件，支持多账户、搜索邮件与附件处理",
+      "folder_path": "imap-smtp-email",
+      "version": "1.0.0",
+      "category": "邮件",
+      "icon": "📧",
+      "author": "gzlicanyi (ClawHub)",
+      "tags": ["imap", "smtp", "email", "mail"]
+    },
+    {
+      "skill_id": "sk7-browser-skill",
+      "skill_name": "browser-skill",
+      "description": "驱动用户已登录的真实 Chromium 浏览器：浏览并读取网页、填写表单、抓取数据、点击操作流程、对 PR 的 UI 做回归测试、验证已部署页面、操作指定标签页。需要 bsk CLI 与浏览器扩展",
+      "folder_path": "browser-skill",
+      "version": "1.0.0",
+      "category": "浏览器",
+      "icon": "🌐",
+      "author": "iWork Team",
+      "tags": ["browser", "automation", "chromium", "bsk", "web"]
+    },
+    {
+      "skill_id": "sk8-smart-charts",
+      "skill_name": "smart-charts",
+      "description": "将数据文件（CSV/TSV/TXT/XLSX/XLS/JSON）转化为独立交互式 ECharts HTML 图表：32 类图表、3 套主题，全离线无需 CDN，每张图内置可溯源事实卡。用户提供表格数据并要求出图/可视化时使用",
+      "folder_path": "smart-charts",
+      "version": "8.3.0",
+      "category": "图表",
+      "icon": "📈",
+      "author": "smart-charts",
+      "tags": ["chart", "echarts", "visualization", "html", "data"]
+    },
+    {
+      "skill_id": "sk9-summarize",
+      "skill_name": "summarize",
+      "description": "智能内容摘要工具：对长文本、文档（TXT/MD/DOCX/PDF）和网页内容自动生成结构化摘要，提炼核心要点与关键词，支持自定义摘要长度与中英文",
+      "folder_path": "summarize",
+      "version": "1.0.0",
+      "category": "效率",
+      "icon": "📋",
+      "author": "openclaw-community",
+      "tags": ["summarize", "summary", "text", "keyword", "productivity"]
+    },
+    {
+      "skill_id": "sk10-editorial-diagrams",
+      "skill_name": "editorial-diagrams",
+      "description": "专业编辑级 SVG 图表设计（调用别名 ed-diag）：架构图、流程图、时序图、状态机、ER 图、时间线、泳道图、四象限图、树形图、韦恩图、金字塔/漏斗图等 13 类，输出自包含 HTML（内嵌 SVG）或纯 SVG，带复杂度预算与预输出校验。用户要求画架构图/流程图/时序图等示意图时使用",
+      "folder_path": "editorial-diagrams",
+      "version": "1.0.0",
+      "category": "图表",
+      "icon": "📐",
+      "author": "Cathryn Lavery (MIT)",
+      "tags": ["diagram", "svg", "flowchart", "architecture", "visualization"]
+    },
+    {
+      "skill_id": "sk11-image-processor",
+      "skill_name": "image-processor",
+      "description": "本地离线图片处理：压缩、缩放、格式转换、裁剪、旋转、翻转、灰度、文字水印、圆角，自动探测 Pillow/ffmpeg/ImageMagick 引擎，不联网、不付费、无需密钥。用户要求处理图片文件时使用",
+      "folder_path": "image-processor",
+      "version": "1.0.0",
+      "category": "图片",
+      "icon": "🖼️",
+      "author": "iWork Team",
+      "tags": ["image", "compress", "resize", "convert", "watermark"]
+    },
+    {
+      "skill_id": "sk12-obsidian-cli",
+      "skill_name": "obsidian-cli",
+      "description": "官方 Obsidian CLI (v1.12+) 笔记库自动化：文件读写、日记、搜索、任务、标签、属性、链接、书签、模板、主题、插件、同步与发布。用户提到 Obsidian / vault / 笔记库时使用",
+      "folder_path": "obsidian-cli",
+      "version": "2.0.0",
+      "category": "笔记",
+      "icon": "🗂️",
+      "author": "adolago",
+      "tags": ["obsidian", "notes", "vault", "markdown", "automation"]
+    },
+    {
+      "skill_id": "sk13-weekly-report",
+      "skill_name": "weekly-report",
+      "description": "周报生成助手：把零散工作记录去重合并、补全要素后，整理成结构清晰、量化到位、可直接发送给上级的周报（支持日报/周报/月报）。用户要求写周报、本周总结、工作汇报或 weekly report 时使用",
+      "folder_path": "weekly-report",
+      "version": "1.0.0",
+      "category": "写作",
+      "icon": "🗓️",
+      "author": "WXY-Dev",
+      "tags": ["weekly-report", "report", "summary", "writing", "productivity"]
+    },
+    {
+      "skill_id": "sk14-wecom-unified",
+      "skill_name": "wecom-unified",
+      "description": "企业微信官方 CLI 全能套件（wecom-cli），覆盖通讯录、文档、在线表格、智能表格、智能文档、日程、会议、待办、微盘、邮件与消息。支持按姓名/拼音/别名查找联系人，搜索与读写文档，创建修改表格与智能表格，创建查询日程并查闲忙与会议室，预约管理会议（含纪要/转写/待办），发送转发邮件与消息。用户给出 doc.weixin.qq.com / page.weixin.qq.com / drive.weixin.qq.com 链接时必定触发；涉及找人/文档/表格/日程/会议/待办/微盘/邮件/发消息等办公场景也应触发",
+      "folder_path": "wecom-unified",
+      "version": "1.0.4",
+      "category": "协作",
+      "icon": "💬",
+      "author": "企业微信官方",
+      "tags": ["wecom", "企业微信", "im", "docs", "calendar", "meeting", "todo", "drive", "mail"]
+    }
+  ]
+}

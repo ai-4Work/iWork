@@ -1,0 +1,16 @@
+.claude
+.vscode
+
+# local env files
+.env
+.env.local
+.env.*.local
+
+.pytest_cache
+
+__pycache__/
+
+debug.log
+
+# 运行时安装的技能目录（由 skill_registry 安装/卸载）
+server/skills/definitions/

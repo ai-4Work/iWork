@@ -1,0 +1,39 @@
+{"event": "OTel tracing disabled"}
+{"event": "OTel metrics disabled"}
+{"event": "2026-08-11T02:10:19.538328Z [info     ] \u001b[1;36mLLM provider: deepseek  model=deepseek-v4-pro\u001b[0m"}
+{"event": "2026-08-11T02:10:19.539334Z [info     ] \u001b[1;36miWork Server started\u001b[0m"}
+{"event": "mcp.all_shutdown"}
+{"event": "OTel tracing disabled"}
+{"event": "OTel metrics disabled"}
+{"event": "2026-08-11T02:11:13.623920Z [info     ] \u001b[1;36mLLM provider: deepseek  model=deepseek-v4-pro\u001b[0m"}
+{"event": "2026-08-11T02:11:13.624791Z [info     ] \u001b[1;36miWork Server started\u001b[0m"}
+{"event": "mcp.all_shutdown"}
+{"event": "OTel tracing disabled"}
+{"event": "OTel metrics disabled"}
+{"event": "2026-08-11T02:13:42.721246Z [info     ] \u001b[1;36mLLM provider: deepseek  model=deepseek-v4-pro\u001b[0m"}
+{"event": "2026-08-11T02:13:42.723246Z [info     ] \u001b[1;36miWork Server started\u001b[0m"}
+{"event": "2026-08-11T02:15:53.235090Z [info     ] \u001b[1;36mGET /mcp/installed -> 200  391ms\u001b[0m"}
+{"event": "2026-08-11T02:15:53.420520Z [info     ] \u001b[1;36mGET /skills/installed -> 200  562ms\u001b[0m"}
+{"event": "2026-08-11T02:16:01.937300Z [info     ] \u001b[1;36mGET /mcp/hub -> 200  266ms\u001b[0m"}
+{"event": "2026-08-11T02:16:01.949826Z [info     ] \u001b[1;36mGET /mcp/installed -> 200  281ms\u001b[0m"}
+{"event": "2026-08-11T02:16:02.247369Z [info     ] \u001b[1;36mGET /mcp/custom -> 200  562ms\u001b[0m"}
+{"event": "2026-08-11T02:16:12.854090Z [info     ] \u001b[1;36mGET /skills/installed -> 200  250ms\u001b[0m"}
+{"event": "2026-08-11T02:16:12.936298Z [info     ] \u001b[1;36mGET /skills/hub -> 200  328ms\u001b[0m"}
+{"event": "2026-08-11T02:16:13.143063Z [info     ] \u001b[1;36mGET /skills/custom -> 200  547ms\u001b[0m"}
+{"event": "session.created  id=c35baaec-a1cd-46ea-bcee-2ea6ca4edc5c  mode=build  scene=office  tools=6  agents=0"}
+{"event": "2026-08-11T02:16:15.399958Z [info     ] \u001b[1;36mPOST /sessions -> 201  360ms\u001b[0m"}
+{"event": "\u001b[1;36mmessage.enqueued  session=c35baaec-a1cd-46ea-bcee-2ea6ca4edc5c  mode=build  scene=office  skills=[]  model=claude-opus-4-7  workspace=C:\\Users\\csybo\\Desktop\\electron-app  files=[]  mcp=[]  content=hi\u001b[0m"}
+{"event": "2026-08-11T02:16:19.900851Z [info     ] \u001b[1;36mPOST /sessions/c35baaec-a1cd-46ea-bcee-2ea6ca4edc5c/messages -> 200  829ms\u001b[0m"}
+{"event": "2026-08-11T02:16:20.639177Z [info     ] \u001b[1;36mmessage_started\u001b[0m     mode=build model=claude-opus-4-7 scene=office session_id=c35baaec-a1cd-46ea-bcee-2ea6ca4edc5c user_id=00000000-0000-0000-0000-000000000001"}
+{"event": "2026-08-11T02:16:21.727375Z [info     ] \u001b[1;36mcontext_built\u001b[0m       messages=1 session_id=c35baaec-a1cd-46ea-bcee-2ea6ca4edc5c system_len=452 tools=26 turn=0 user_id=00000000-0000-0000-0000-000000000001"}
+{"event": "deepseek.request  model=deepseek-v4-pro  messages=['system(rc=N, tc=N)', 'user(rc=N, tc=N)']"}
+{"event": "2026-08-11T02:16:24.977414Z [info     ] \u001b[1;36massistant_response\u001b[0m  reasoning_len=121 session_id=c35baaec-a1cd-46ea-bcee-2ea6ca4edc5c text='\u4f60\u597d\uff01\u6211\u662f iWork\uff0c\u4f60\u7684\u65e5\u5e38\u529e\u516c AI \u52a9\u624b \u26a1\\n\\n\u6211\u770b\u5230\u4f60\u7684\u5de5\u4f5c\u76ee\u5f55\u662f `electron-app`\u3002\u8ba9\u6211\u5148\u4e86\u89e3\u4e00\u4e0b\u9879\u76ee\u60c5\u51b5\uff1a' text_len=66 thinking='\u7528\u6237\u53d1\u9001\u4e86\"hi\"\uff0c\u8fd9\u662f\u4e00\u4e2a\u53cb\u597d\u7684\u95ee\u5019\u3002\u6211\u9700\u8981\u4ee5\u7b80\u6d01\u3001\u7ed3\u6784\u5316\u3001\u9ad8\u6548\u7684\u65b9\u5f0f\u56de\u5e94\u3002\u6839\u636e\u7cfb\u7edf\u63d0\u793a\uff0c\u6211\u662f iWork \u65e5\u5e38\u529e\u516c AI \u52a9\u624b\uff0c\u5f53\u524d\u5904\u4e8e\"\u6784\u5efa\"\u6a21\u5f0f\u3002\\n\\n\u8ba9\u6211\u5148\u68c0\u67e5\u5de5\u4f5c\u76ee\u5f55\u4e2d\u6709\u4ec0\u4e48\uff0c\u4ee5\u4fbf\u4e86\u89e3\u7528\u6237\u7684\u9879\u76ee\u4e0a\u4e0b\u6587\u3002\u540c\u65f6\u52a0\u8f7d\u7528\u6237\u8bb0\u5fc6\u4e86\u89e3\u7528\u6237\u504f\u597d\u3002' turn=0 user_id=00000000-0000-0000-0000-000000000001"}
+{"event": "2026-08-11T02:16:24.977414Z [info     ] \u001b[1;36mtool_call\u001b[0m           input='{\"name\": \"user_role.md\"}' name=load_memory session_id=c35baaec-a1cd-46ea-bcee-2ea6ca4edc5c turn=0 user_id=00000000-0000-0000-0000-000000000001"}
+{"event": "2026-08-11T02:16:25.763455Z [info     ] \u001b[1;36mtool_executed\u001b[0m       duration_ms=155 location=server result=\"{'status': 'ok', 'name': 'user_role.md', 'content': '# \u7528\u6237\u89d2\u8272\\\\n\\\\n- **\u89d2\u8272**\uff1a\u524d\u7aef\u5de5\u7a0b\u5e08\\\\n- **\u6280\u672f\u6808\u504f\u597d**\uff1aReact \u751f\u6001\uff08React\u3001Next.js \u7b49\uff09\\\\n- **\u5de5\u4f5c\u98ce\u683c**\uff1a\u559c\u6b22\u7b80\u6d01\u3001\u7ed3\u6784\u5316\u3001\u9ad8\u6548\u7684\u56de\u590d'}\" session_id=c35baaec-a1cd-46ea-bcee-2ea6ca4edc5c success=False tool=load_memory user_id=00000000-0000-0000-0000-000000000001"}
+{"event": "2026-08-11T02:16:25.764452Z [info     ] \u001b[1;36mtool_call\u001b[0m           input='{\"command\": \"cd \\\\\"C:\\\\\\\\Users\\\\\\\\csybo\\\\\\\\Desktop\\\\\\\\electron-app\\\\\" && dir\"}' name=bash session_id=c35baaec-a1cd-46ea-bcee-2ea6ca4edc5c turn=0 user_id=00000000-0000-0000-0000-000000000001"}
+{"event": "2026-08-11T02:18:26.478996Z [info     ] \u001b[1;36mtool_executed\u001b[0m       duration_ms=120016 location=client result=\"{'success': False, 'error': '\u5ba2\u6237\u7aef\u8d85\u65f6', 'duration_ms': 120000}\" session_id=c35baaec-a1cd-46ea-bcee-2ea6ca4edc5c success=False tool=bash user_id=00000000-0000-0000-0000-000000000001"}
+{"event": "2026-08-11T02:18:26.480562Z [info     ] \u001b[1;36mllm_turn\u001b[0m            duration_ms=124750 events=95 mode=build session_id=c35baaec-a1cd-46ea-bcee-2ea6ca4edc5c tokens_in=0 tokens_out=0 turn=0 user_id=00000000-0000-0000-0000-000000000001"}
+{"event": "2026-08-11T02:18:27.677287Z [info     ] \u001b[1;36mcontext_built\u001b[0m       messages=4 session_id=c35baaec-a1cd-46ea-bcee-2ea6ca4edc5c system_len=452 tools=26 turn=1 user_id=00000000-0000-0000-0000-000000000001"}
+{"event": "deepseek.request  model=deepseek-v4-pro  messages=['system(rc=N, tc=N)', 'user(rc=N, tc=N)', 'assistant(rc=Y, tc=Y)', 'tool(rc=N, tc=N)', 'tool(rc=N, tc=N)']"}
+{"event": "2026-08-11T02:18:31.243893Z [info     ] \u001b[1;36massistant_response\u001b[0m  reasoning_len=104 session_id=c35baaec-a1cd-46ea-bcee-2ea6ca4edc5c text=\u76ee\u5f55\u5217\u8868\u8d85\u65f6\u4e86\uff0c\u6362\u4e2a\u65b9\u5f0f\u770b\u770b\u9879\u76ee\u7ed3\u6784\uff1a text_len=19 thinking='\u7b2c\u4e00\u4e2a\u8c03\u7528\u6210\u529f\uff0c\u52a0\u8f7d\u4e86\u7528\u6237\u8bb0\u5fc6\u3002\u7528\u6237\u662f\u524d\u7aef\u5de5\u7a0b\u5e08\uff0c\u504f\u597d React \u6280\u672f\u6808\u3002\\n\\n\u7b2c\u4e8c\u4e2a bash \u8c03\u7528\u8d85\u65f6\u4e86\u3002\u53ef\u80fd\u662f\u56e0\u4e3a Windows \u4e0b\u7684 shell \u6267\u884c\u6709\u95ee\u9898\u3002\u8ba9\u6211\u5c1d\u8bd5\u4f7f\u7528 glob \u6765\u4e86\u89e3\u9879\u76ee\u7ed3\u6784\u3002' turn=1 user_id=00000000-0000-0000-0000-000000000001"}
+{"event": "2026-08-11T02:18:31.244898Z [info     ] \u001b[1;36mtool_call\u001b[0m           input='{\"pattern\": \"*\", \"path\": \"C:\\\\\\\\Users\\\\\\\\csybo\\\\\\\\Desktop\\\\\\\\electron-app\"}' name=glob session_id=c35baaec-a1cd-46ea-bcee-2ea6ca4edc5c turn=1 user_id=00000000-0000-0000-0000-000000000001"}

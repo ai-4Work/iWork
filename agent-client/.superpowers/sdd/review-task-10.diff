@@ -1,0 +1,53 @@
+# Review package: 0c712b5..b74e44d
+
+## Commits
+b74e44d feat: add global styles with dark theme
+
+## Files changed
+ src/renderer/src/styles/globals.css | 37 +++++++++++++++++++++++++++++++++++++
+ 1 file changed, 37 insertions(+)
+
+## Diff
+diff --git a/src/renderer/src/styles/globals.css b/src/renderer/src/styles/globals.css
+new file mode 100644
+index 0000000..9dc27e2
+--- /dev/null
++++ b/src/renderer/src/styles/globals.css
+@@ -0,0 +1,37 @@
++@tailwind base;
++@tailwind components;
++@tailwind utilities;
++
++* {
++  margin: 0;
++  padding: 0;
++  box-sizing: border-box;
++}
++
++html, body, #root {
++  height: 100%;
++  overflow: hidden;
++}
++
++body {
++  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
++  background-color: #181825;
++  color: #e0e0e0;
++}
++
++::-webkit-scrollbar {
++  width: 6px;
++}
++
++::-webkit-scrollbar-track {
++  background: transparent;
++}
++
++::-webkit-scrollbar-thumb {
++  background: #3b3b5c;
++  border-radius: 3px;
++}
++
++::-webkit-scrollbar-thumb:hover {
++  background: #4a4a6a;
++}

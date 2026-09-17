@@ -1,0 +1,295 @@
+### Task 9: Chat Store
+
+**Files:**
+- Create: `src/renderer/src/stores/chatStore.ts`
+
+**Interfaces:**
+- Consumes: conversationStore (Task 6), api (Task 8), types (Task 2)
+- Produces: `useChatStore` with `sendMessage`, `confirmToolCall`, `cancelToolCall`, `isLoading`
+
+- [ ] **Step 1: Create chat store**
+
+`src/renderer/src/stores/chatStore.ts`:
+
+```typescript
+import { create } from 'zustand'
+import type { Message, ToolCall, ToolType } from '../types'
+import { useConversationStore } from './conversationStore'
+import { sendChatMessage } from '../services/api'
+import { ipcClient } from '../services/ipcClient'
+import type { SSEChunk } from '../services/sse'
+
+let msgId = 1
+function genMsgId(): string {
+  return `msg_${Date.now()}_${msgId++}`
+}
+
+function genToolId(): string {
+  return `tool_${Date.now()}_${msgId++}`
+}
+
+const TOOL_TYPE_MAP: Record<string, ToolType> = {
+  glob: 'glob',
+  read: 'read',
+  grep: 'grep',
+  write: 'write',
+  edit: 'edit'
+}
+
+const READ_TOOLS: Set<ToolType> = new Set(['glob', 'read', 'grep'])
+const WRITE_TOOLS: Set<ToolType> = new Set(['write', 'edit'])
+
+async function executeToolCall(tc: ToolCall, workspacePath: string): Promise<string> {
+  const { type, args } = tc
+  try {
+    switch (type) {
+      case 'glob':
+        return JSON.stringify(await ipcClient.file.glob(args.pattern || '**/*'))
+      case 'read':
+        return await ipcClient.file.read(args.path || args.filePath || '')
+      case 'grep':
+        return JSON.stringify(
+          await ipcClient.file.grep(args.pattern || '', args.path || '.')
+        )
+      case 'write':
+        await ipcClient.file.write(args.path || args.filePath || '', args.content || '')
+        return `File written: ${args.path || args.filePath}`
+      case 'edit':
+        await ipcClient.file.edit(
+          args.path || args.filePath || '',
+          args.oldStr || args.old_string || '',
+          args.newStr || args.new_string || ''
+        )
+        return `File edited: ${args.path || args.filePath}`
+    }
+  } catch (err) {
+    throw new Error(err instanceof Error ? err.message : String(err))
+  }
+}
+
+interface ChatState {
+  isLoading: boolean
+  sendMessage: (content: string) => Promise<void>
+  confirmToolCall: (tcId: string) => Promise<void>
+  cancelToolCall: (tcId: string) => void
+}
+
+export const useChatStore = create<ChatState>(() => ({
+  isLoading: false,
+
+  sendMessage: async (content: string) => {
+    const convStore = useConversationStore.getState()
+    const conv = convStore.getCurrentConversation()
+
+    // Create conversation if none exists
+    let convId = conv?.id
+    if (!convId) {
+      convId = convStore.create()
+    }
+
+    // Add user message
+    const userMsg: Message = {
+      id: genMsgId(),
+      role: 'user',
+      content,
+      timestamp: Date.now()
+    }
+    convStore.addMessage(userMsg)
+
+    // Create assistant placeholder
+    const assistantMsg: Message = {
+      id: genMsgId(),
+      role: 'assistant',
+      content: '',
+      isStreaming: true,
+      toolCalls: [],
+      timestamp: Date.now()
+    }
+    convStore.addMessage(assistantMsg)
+
+    const currentConv = convStore.getCurrentConversation()
+    if (!currentConv) return
+
+    useChatStore.setState({ isLoading: true })
+
+    await sendChatMessage(
+      currentConv.messages.filter((m) => !m.isStreaming),
+      (chunk: SSEChunk) => {
+        // Handle content stream
+        if (chunk.content) {
+          convStore.updateLastAssistantMessage((msg) => ({
+            ...msg,
+            content: msg.content + chunk.content
+          }))
+        }
+
+        // Handle tool calls
+        if (chunk.toolCalls.size > 0) {
+          const existingToolCalls =
+            convStore.getCurrentConversation()?.messages.find(
+              (m) => m.id === assistantMsg.id
+            )?.toolCalls || []
+
+          chunk.toolCalls.forEach((tc, idx) => {
+            const toolType = TOOL_TYPE_MAP[tc.name] || 'read'
+            // Check if this tool call already exists
+            const existing = existingToolCalls.find(
+              (et) => et.id === tc.id || et.id.startsWith(`tool_${idx}`)
+            )
+
+            if (existing) {
+              // Update arguments
+              existing.args = { ...existing.args, _raw: tc.arguments }
+            } else if (tc.name) {
+              let args: Record<string, string> = { _raw: tc.arguments }
+              try {
+                const parsed = JSON.parse(tc.arguments)
+                args = { ...parsed, _raw: tc.arguments }
+              } catch {
+                // arguments may be incomplete (streaming), use raw string
+              }
+
+              const newTc: ToolCall = {
+                id: tc.id || `tool_${idx}`,
+                type: toolType,
+                name: tc.name,
+                args,
+                status: WRITE_TOOLS.has(toolType) ? 'confirming' : 'pending'
+              }
+
+              convStore.updateLastAssistantMessage((msg) => ({
+                ...msg,
+                toolCalls: [...(msg.toolCalls || []), newTc]
+              }))
+            }
+          })
+
+          // Auto-execute read tools
+          setTimeout(async () => {
+            const updatedConv = convStore.getCurrentConversation()
+            const updatedMsg = updatedConv?.messages.find(
+              (m) => m.id === assistantMsg.id
+            )
+            if (!updatedMsg?.toolCalls) return
+
+            for (const tc of updatedMsg.toolCalls) {
+              if (tc.status === 'pending' && READ_TOOLS.has(tc.type)) {
+                // Mark executing
+                convStore.updateLastAssistantMessage((msg) => ({
+                  ...msg,
+                  toolCalls: msg.toolCalls?.map((t) =>
+                    t.id === tc.id ? { ...t, status: 'executing' as const } : t
+                  )
+                }))
+
+                try {
+                  const result = await executeToolCall(tc, '')
+                  convStore.updateLastAssistantMessage((msg) => ({
+                    ...msg,
+                    toolCalls: msg.toolCalls?.map((t) =>
+                      t.id === tc.id
+                        ? { ...t, status: 'done' as const, result }
+                        : t
+                    )
+                  }))
+                } catch (err) {
+                  convStore.updateLastAssistantMessage((msg) => ({
+                    ...msg,
+                    toolCalls: msg.toolCalls?.map((t) =>
+                      t.id === tc.id
+                        ? {
+                            ...t,
+                            status: 'error' as const,
+                            result: err instanceof Error ? err.message : String(err)
+                          }
+                        : t
+                    )
+                  }))
+                }
+              }
+            }
+          }, 0)
+        }
+      },
+      (err: Error) => {
+        convStore.updateLastAssistantMessage((msg) => ({
+          ...msg,
+          content: msg.content + `\n\n**错误:** ${err.message}`,
+          isStreaming: false
+        }))
+        useChatStore.setState({ isLoading: false })
+      },
+      () => {
+        convStore.updateLastAssistantMessage((msg) => ({
+          ...msg,
+          isStreaming: false
+        }))
+        useChatStore.setState({ isLoading: false })
+      }
+    )
+  },
+
+  confirmToolCall: async (tcId: string) => {
+    const convStore = useConversationStore.getState()
+
+    // Mark executing
+    convStore.updateLastAssistantMessage((msg) => ({
+      ...msg,
+      toolCalls: msg.toolCalls?.map((t) =>
+        t.id === tcId ? { ...t, status: 'executing' as const } : t
+      )
+    }))
+
+    const conv = convStore.getCurrentConversation()
+    const lastMsg = conv?.messages[conv.messages.length - 1]
+    const tc = lastMsg?.toolCalls?.find((t) => t.id === tcId)
+
+    if (tc) {
+      try {
+        const result = await executeToolCall(tc, '')
+        convStore.updateLastAssistantMessage((msg) => ({
+          ...msg,
+          toolCalls: msg.toolCalls?.map((t) =>
+            t.id === tcId ? { ...t, status: 'done' as const, result } : t
+          )
+        }))
+      } catch (err) {
+        convStore.updateLastAssistantMessage((msg) => ({
+          ...msg,
+          toolCalls: msg.toolCalls?.map((t) =>
+            t.id === tcId
+              ? {
+                  ...t,
+                  status: 'error' as const,
+                  result: err instanceof Error ? err.message : String(err)
+                }
+              : t
+          )
+        }))
+      }
+    }
+  },
+
+  cancelToolCall: (tcId: string) => {
+    const convStore = useConversationStore.getState()
+    convStore.updateLastAssistantMessage((msg) => ({
+      ...msg,
+      toolCalls: msg.toolCalls?.map((t) =>
+        t.id === tcId
+          ? { ...t, status: 'error' as const, result: 'User cancelled' }
+          : t
+      )
+    }))
+  }
+}))
+```
+
+- [ ] **Step 2: Commit**
+
+```bash
+git add src/renderer/src/stores/chatStore.ts
+git commit -m "feat: add chat store with SSE streaming and tool call handling"
+```
+
+---
+

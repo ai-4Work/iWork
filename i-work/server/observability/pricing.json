@@ -1,0 +1,8 @@
+{
+  "deepseek-chat":       { "input": 0.00014, "output": 0.00028, "cache_read": 0.000014 },
+  "deepseek-reasoner":   { "input": 0.00014, "output": 0.00028, "cache_read": 0.000014 },
+  "deepseek-v4-pro":     { "input": 0.00014, "output": 0.00028, "cache_read": 0.000014 },
+  "claude-opus-4-7":     { "input": 0.015,   "output": 0.075,   "cache_read": 0.0015 },
+  "claude-sonnet-4-6":   { "input": 0.003,   "output": 0.015,   "cache_read": 0.0003 },
+  "claude-haiku-4-5":    { "input": 0.001,   "output": 0.005,   "cache_read": 0.0001 }
+}

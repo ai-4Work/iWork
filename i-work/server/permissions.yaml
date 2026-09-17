@@ -1,0 +1,158 @@
+# =====================================================================
+# iWork 权限策略配置   server/permissions.yaml
+# 参考 Codex config.toml，服务端启动时由 PermissionEngine 加载编译。
+# 完整字段说明见 docs/chapters/权限控制.md §6。
+# =====================================================================
+version: 1
+
+# ---- 全局审批开关（维度3 全局层）----
+# on-request（默认）：够格自动放行（skip），命中规则/危险启发式才问（needs_approval）
+# never           ：从不问，需要问的一律拒绝（forbidden）
+# granular        ：按细分表逐类开关（当前支持 shell / rules / network）
+# 网络未命中白名单时的 Ask 受此总闸把关：never → 一律拒；granular 且 network:false → 拒；
+# 否则再按画像的 network.unknown_domain 细化（ask → 客户端弹确认 / deny → 画像级禁问）。
+# 该语义随 policy 包的 network.approval_policy 字段下发，由客户端代理执行。
+approval_policy: on-request
+# approval_policy:
+#   granular:
+#     shell: true            # 命令类工具审批
+#     rules: true            # tool_rules 里 prompt 规则的审批
+#     network: true          # 网络域名审批（未命中白名单时的 Ask 是否放行）
+
+# ---- 默认画像：不写 sandbox_mode 时用这个 ----
+default_permissions: ":dev"
+# default_permissions: ":full"
+
+# =====================================================================
+# 权限画像（维度1 文件系统 + 维度2 网络）
+# 内置三档（不可覆盖）：:read-only / :workspace / :full
+# 自定义画像可 extends 继承内置的 :read-only 或 :workspace
+# =====================================================================
+permissions:
+  read-only:            # 内置：全盘只读，网络受限
+    filesystem:
+      ":root": read
+    network:
+      enabled: false
+
+  workspace:            # 内置：工作区可写，其余只读，网络默认关闭
+    # filesystem 段对内置画像不生效：引擎硬编码为 :workspace_roots / :tmpdir 可写、
+    # .git/** 与 .env 禁读写（permission.py:231-237、246-250）。
+    # 需要自定义文件系统策略请用自定义画像，见下方 dev。
+    network:
+      enabled: false
+
+  full:                 # 内置 danger-full-access：关掉整套权限体系，不建沙箱
+    disabled: true
+
+  # ---- 日常开发画像（默认画像）：工作区可写 + 联网 ----
+  dev:
+    extends: ":workspace"
+    filesystem:
+      ":root": read
+      ":workspace_roots": write
+      ":tmpdir": write
+      # 工作区外的可写根：让 pip install 能装进 conda env（否则沙箱只授权 --workspace + --temp）。
+      # 客户端在沙箱 spawn 前用 runner 派生的写 SID 对这些目录补授可继承 ACE（agent-client
+      # sandbox.ts ensureExtraWritableGrants），故 bash 里的 pip install 也放行。
+      # 装了带命令行工具的包会往 Scripts 写入口脚本，故两个目录都要给。
+      "C:/Users/zll/.conda/envs/python3.12/Lib/site-packages": write
+      "C:/Users/zll/.conda/envs/python3.12/Scripts": write
+      ":deny_workspace":    # 禁止 读和写
+        - ".git/**"         # 保护路径：禁止改 git 元数据
+        - ".env"
+    network:
+      enabled: true
+      # 域名白名单：deny > allow；*.x 只子域，**.x 含主域；"*" 全匹配
+      domains:
+        "registry.npmjs.org": allow
+        "**.github.com": allow
+        "evil.example.com": deny
+      unknown_domain: ask    # 未命中白名单：ask（客户端弹确认）| deny（画像级禁问）；受全局 approval_policy 总闸约束
+
+# =====================================================================
+# 工具规则（维度3 工具层）：命令类工具的命令前缀规则
+# 只作用于命令类工具（bash / exec_command）；文件类逐路径判定不在此配
+# decision: allow（Skip）/ prompt（NeedsApproval）/ forbidden（硬停）
+#
+# 匹配语义：对命令做空白分词后取"前 N 个 token 精确前缀"比较（不是子串、不解析路径）。
+# 因此每条规则都要按【客户端实际产出命令的 shell 语法】来写词法——
+#   Windows 客户端 = PowerShell（沙箱与 MSYS/bash 不兼容，见 agent-client sandbox.ts），
+#   Linux = bash、macOS = zsh。
+# 可选 shell 归属：powershell | posix（bash/zsh）| all（缺省 = all，对所有 shell 生效）。
+# 外部程序命令（git / npm / node…）三端词法一致，不必标 shell；shell 内置的破坏性命令才按端区分。
+# 匹配本身按会话 shell 适配：powershell 走 Windows 分词（保留 C:\）+ 大小写不敏感；posix 走 POSIX 分词 + 大小写敏感。
+# =====================================================================
+tool_rules:
+  # 跨 shell 通用（外部程序，词法三端一致）
+  - object: "tool:bash"
+    rule: ["git", "status"]
+    decision: allow
+  - object: "tool:bash"
+    rule: ["git", "push"]
+    decision: prompt
+  - object: "tool:bash"
+    rule: ["git", "clone"]
+    decision: prompt
+  # POSIX 词法（Linux/macOS 客户端）
+  - object: "tool:bash"
+    rule: ["rm", "-rf"]
+    decision: forbidden
+    shell: posix
+  - object: "tool:bash"
+    rule: ["rm", "-rf", "/"]
+    decision: forbidden
+    shell: posix
+  # PowerShell 词法（Windows 客户端）：cmdlet / 别名 / 参数均大小写不敏感
+  - object: "tool:bash"
+    rule: ["Remove-Item", "-Recurse", "-Force"]
+    decision: forbidden
+    shell: powershell
+  - object: "tool:bash"
+    rule: ["Remove-Item", "-LiteralPath", "C:\\", "-Recurse", "-Force"]
+    decision: forbidden
+    shell: powershell
+
+# ---- 网络级规则（host + protocol 精确，不认通配；通配写 network.domains）----
+# 顶层全局配置（维度3 工具层），客户端代理消费：从 CONNECT 提取 host+protocol 先比这里
+# decision: allow（放行）/ prompt（问人）/ forbidden（硬拦）
+network_rules:
+  - host: "registry.npmjs.org"
+    protocol: "https"
+    decision: allow
+  - host: "git.example.com"
+    protocol: "https"
+    decision: prompt
+
+# ---- 危险命令启发式：命中即问（对标 deny-rm.sh 的防御面）----
+# dangerous_command_heuristics: true 为总开关；命中即 prompt。
+# dangerous_patterns：子串匹配列表，替换语义（写了即全量替换内置默认，对所有 shell 生效，可加可删）。
+# 未配置时引擎按会话 shell 自动选内置默认集：POSIX（bash/zsh）为下方默认；
+# PowerShell 会话在此基础上并集盘符级破坏性操作（Clear-Disk / Remove-Partition /
+# Format-Volume / format c: 等）。下方默认列出仅供查阅，不参与匹配（避免替换语义吞掉 PS 补充集）。
+dangerous_command_heuristics: true
+# dangerous_patterns:
+#   - "rm -rf /"
+#   - "rm -fr /"
+#   - "rm -rf *"
+#   - "mkfs."
+#   - "dd if="
+#   - "> /dev/sda"
+#   - ":(){ :|:& };:"
+#   - "chmod 777 /"
+#   - "chmod 777 ."
+
+# ---- 文件类工具路径判定 ----
+file_tools:
+  path_check: true    # write/edit/read 等逐路径预检
+
+# =====================================================================
+# 沙箱豁免：这些可执行文件不受写受限沙箱约束（客户端识别命令首个 token）
+# Windows 沙箱是 WRITE_RESTRICTED 令牌，写访问只认受限 SID 列表，因此某些工具在沙箱内必然
+# 失败：它们必须访问自己的命名管道 / 家目录（如 bsk 与常驻 daemon 通信，管道 DACL 仅授权
+# 属主账号 SID，受限令牌的写检查不匹配 → EPERM）。列入此处的可执行文件改走裸机执行路径
+# （结果标记 sandboxed=false），不再受写沙箱约束。仅收窄到此类别 —— 豁免等于放弃该命令的
+# 写保护。匹配按命令首个 token 的 basename（去 .exe、大小写不敏感）。
+# =====================================================================
+sandbox:
+  exempt_commands: ["bsk"]

@@ -1,0 +1,22 @@
+{
+  "hooks": [
+    {
+      "name": "deny-rm",
+      "description": "阻止危险的 shell 命令",
+      "on": "tool.before",
+      "script": "./server/hooks/deny-rm.sh",
+      "order": 10,
+      "timeout_ms": 5000,
+      "enabled": true
+    },
+    {
+      "name": "cost-tracker",
+      "description": "每次 LLM 调用后记录 Token 用量",
+      "on": "llm.after",
+      "script": "python3 ./server/hooks/cost-tracker.py",
+      "order": 20,
+      "timeout_ms": 10000,
+      "enabled": false
+    }
+  ]
+}

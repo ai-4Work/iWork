@@ -1,0 +1,144 @@
+# =====================================================================
+# iWork 单轮多工具调度配置   server/scheduling.yaml
+# 服务端启动时由 SchedulingPolicy 加载编译（与 permissions.yaml 同一套加载形状）。
+# 完整说明见 docs/chapters/14-单回合工具调用并发 §1–§2。
+#
+# 这份配置只回答一个问题：这个工具调用能不能跟**同一轮**的其它调用同时跑。
+# 它不做权限决策（要不要问人 / 拦不拦，那是 permissions.yaml 的事），
+# 也不做重试安全判定（idempotency.READ_ONLY_TOOLS 是另一套语义）。
+#
+# 判定代价刻意不对称：
+#   把写判成读 → 两个写同时改同一个文件（丢数据，不可逆）
+#   把读判成写 → 只是多等一次串行（慢一点，无副作用）
+# 所以**未列出的一律判"写"**：漏写一条只是慢，多写一条是危险。
+# 名单不需要精确，只需要"有把握不乱动用户文件"；名单的等价性由
+# tests/test_tool_scheduling.py 卡住（20 条读命令 + 30 条写命令）。
+#
+# 本文件缺失 → 引擎启动即报错（不静默降级、代码里不留兜底副本）。
+# 单个键缺失 → 该类别保守退化为空（全判写），不报错。改完需重启服务。
+# =====================================================================
+version: 1
+
+# ---- 工具名级：命中即判"读"（可进读段并发）----
+# 未列出的名字一律判写，包括 MCP 工具与模型幻觉出来的工具名。
+read_tools:
+  # 客户端文件工具（与 permission.FILE_READ_TOOLS 对齐）
+  - read_file
+  - read
+  - glob
+  - grep
+  # skill：加载 SKILL.md 指令集，只读无副作用
+  - skill
+  # 服务端直执行的记忆读取（与 idempotency.READ_ONLY_TOOLS 对齐）
+  - recall
+  - load_memory
+
+# ---- 命令类工具：参数里的 command 交给下面的命令白名单判定 ----
+command_tools:
+  - bash
+  - exec_command
+
+# ---- bash 只读白名单（docs/chapters/14 §1.2③）----
+# 一条命令判纯读 = "程序在名单里" + "命令串没有写构造"（后者是代码里的护栏，见
+# scheduling.py 的 _GUARD_CHARS：出现 > < | & ; 反引号换行、$( 、<< 一律判写）。
+# 命中下面的 write_flags 也从白名单里剔除。
+read_only_commands:
+  # 文件内容
+  - cat
+  - head
+  - tail
+  - more
+  - less
+  - wc
+  - od
+  - xxd
+  - hexdump
+  - strings
+  - file
+  # 搜索过滤
+  - grep
+  - egrep
+  - fgrep
+  - rg
+  # 目录 / 信息
+  - ls
+  - tree
+  - du
+  - df
+  - stat
+  - which
+  - type
+  - lsof
+  # 环境 / 系统
+  - env
+  - printenv
+  - pwd
+  - echo
+  - date
+  - uname
+  - hostname
+  - id
+  - whoami
+  - ps
+  # 文本加工（本身只读，落盘靠 -o / 重定向）
+  - cut
+  - sort
+  - uniq
+  - tr
+  # 自身基本只读，但要额外排掉写 flag（见 write_flags）
+  - sed
+  - awk
+  - find
+  - curl
+
+# ---- 出现即判写的 flag（把程序从白名单里剔除）----
+# 短 flag 按前缀匹配（-i.bak、-d@file 都算），长 flag 兼容 --foo=bar。
+write_flags:
+  sed:  ["-i", "--in-place"]
+  sort: ["-o", "--output"]
+  find: ["-exec", "-ok", "-delete", "-fprint", "-fls"]
+  curl: ["-o", "--output", "-O", "--remote-name", "-d", "--data", "-F", "--form",
+         "-T", "--upload-file", "-X", "--request"]
+
+# ---- git 只读子命令 ----
+# 注意不含 config / tag / stash / worktree / reflog —— 它们都有写形式。
+read_only_git_subcommands:
+  - status
+  - diff
+  - log
+  - show
+  - rev-parse
+  - describe
+  - blame
+  - ls-files
+  - ls-tree
+  - cat-file
+  - shortlog
+  - whatchanged
+  - grep
+  - count-objects
+  - rev-list
+  - name-rev
+
+# ---- git branch / remote 只放行这些纯查询 flag ----
+# branch / remote 裸形式（`git branch`）也算只读；带其它 flag 一律判写。
+git_query_flags:
+  - "-v"
+  - "-vv"
+  - "--verbose"
+  - "-a"
+  - "--all"
+  - "-r"
+  - "--remotes"
+  - "--list"
+  - "--contains"
+  - "--merged"
+  - "--no-merged"
+
+# ---- 写类工具（path_of 用它取目标路径）----
+# 预留给 doc §2.2 的"写段内相邻异文件可并行"；当前写段一律串行，尚未开启。
+write_file_tools:
+  - write_file
+  - write
+  - edit_file
+  - apply_patch

@@ -1,0 +1,16 @@
+{
+  "servers": [
+    {
+      "server_id": "mh8",
+      "server_name": "百度搜索 MCP",
+      "description": "百度搜索引擎，适合中文内容搜索，免费无需 API Key",
+      "icon": "🔍",
+      "category": "搜索",
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "baidu-search-mcp", "--max-result=5", "--fetch-content-count=2"],
+      "env": {},
+      "url": null
+    }
+  ]
+}

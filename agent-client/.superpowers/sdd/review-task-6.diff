@@ -1,0 +1,158 @@
+# Review package: 6e670697bb8bdf52cf9adc386cd56719d7a6e27f..0c712b5
+
+## Commits
+0c712b5 feat: add conversation store with multi-session support
+203d23e feat: add command store with built-in / commands
+
+## Files changed
+ src/renderer/src/stores/commandStore.ts      |  29 ++++++++
+ src/renderer/src/stores/conversationStore.ts | 105 +++++++++++++++++++++++++++
+ 2 files changed, 134 insertions(+)
+
+## Diff
+diff --git a/src/renderer/src/stores/commandStore.ts b/src/renderer/src/stores/commandStore.ts
+new file mode 100644
+index 0000000..3a07ee2
+--- /dev/null
++++ b/src/renderer/src/stores/commandStore.ts
+@@ -0,0 +1,29 @@
++import { create } from 'zustand'
++import type { Command } from '../types'
++
++const BUILTIN_COMMANDS: Command[] = [
++  { id: 'explain', trigger: '/explain', label: '解释代码', description: '解释选中的代码' },
++  { id: 'fix', trigger: '/fix', label: '修复问题', description: '修复代码中的问题' },
++  { id: 'test', trigger: '/test', label: '生成测试', description: '为选中的代码生成测试' },
++  { id: 'refactor', trigger: '/refactor', label: '重构代码', description: '重构选中的代码' }
++]
++
++interface CommandState {
++  commands: Command[]
++  filter: (search: string) => Command[]
++}
++
++export const useCommandStore = create<CommandState>(() => ({
++  commands: BUILTIN_COMMANDS,
++
++  filter: (search: string) => {
++    const q = search.toLowerCase().replace(/^\//, '')
++    if (!q) return BUILTIN_COMMANDS
++    return BUILTIN_COMMANDS.filter(
++      (c) =>
++        c.trigger.toLowerCase().includes(q) ||
++        c.label.toLowerCase().includes(q) ||
++        c.description.toLowerCase().includes(q)
++    )
++  }
++}))
+diff --git a/src/renderer/src/stores/conversationStore.ts b/src/renderer/src/stores/conversationStore.ts
+new file mode 100644
+index 0000000..f54704b
+--- /dev/null
++++ b/src/renderer/src/stores/conversationStore.ts
+@@ -0,0 +1,105 @@
++import { create } from 'zustand'
++import type { Conversation, Message } from '../types'
++
++let nextId = 1
++function genId(): string {
++  return `conv_${Date.now()}_${nextId++}`
++}
++function msgGenId(): string {
++  return `msg_${Date.now()}_${nextId++}`
++}
++
++interface ConversationState {
++  conversations: Conversation[]
++  currentConversationId: string | null
++
++  create: () => string
++  delete: (id: string) => void
++  select: (id: string) => void
++  updateTitle: (id: string, title: string) => void
++  addMessage: (message: Message) => void
++  updateLastAssistantMessage: (updater: (msg: Message) => Message) => void
++  getCurrentConversation: () => Conversation | undefined
++}
++
++export const useConversationStore = create<ConversationState>((set, get) => ({
++  conversations: [],
++  currentConversationId: null,
++
++  create: () => {
++    const id = genId()
++    const conv: Conversation = {
++      id,
++      title: '新对话',
++      createdAt: Date.now(),
++      updatedAt: Date.now(),
++      messages: []
++    }
++    set((s) => ({
++      conversations: [conv, ...s.conversations],
++      currentConversationId: id
++    }))
++    return id
++  },
++
++  delete: (id: string) => {
++    set((s) => {
++      const filtered = s.conversations.filter((c) => c.id !== id)
++      const currentId =
++        s.currentConversationId === id
++          ? filtered[0]?.id ?? null
++          : s.currentConversationId
++      return { conversations: filtered, currentConversationId: currentId }
++    })
++  },
++
++  select: (id: string) => set({ currentConversationId: id }),
++
++  updateTitle: (id: string, title: string) => {
++    set((s) => ({
++      conversations: s.conversations.map((c) =>
++        c.id === id ? { ...c, title } : c
++      )
++    }))
++  },
++
++  addMessage: (message: Message) => {
++    set((s) => ({
++      conversations: s.conversations.map((c) => {
++        if (c.id === s.currentConversationId) {
++          // Auto-title from first user message
++          const title =
++            c.title === '新对话' && message.role === 'user'
++              ? message.content.slice(0, 40)
++              : c.title
++          return {
++            ...c,
++            title,
++            updatedAt: Date.now(),
++            messages: [...c.messages, message]
++          }
++        }
++        return c
++      })
++    }))
++  },
++
++  updateLastAssistantMessage: (updater: (msg: Message) => Message) => {
++    set((s) => ({
++      conversations: s.conversations.map((c) => {
++        if (c.id !== s.currentConversationId) return c
++        const messages = [...c.messages]
++        const lastIdx = messages.length - 1
++        if (lastIdx >= 0 && messages[lastIdx].role === 'assistant') {
++          messages[lastIdx] = updater(messages[lastIdx])
++        }
++        return { ...c, messages, updatedAt: Date.now() }
++      })
++    }))
++  },
++
++  getCurrentConversation: () => {
++    const state = get()
++    return state.conversations.find((c) => c.id === state.currentConversationId)
++  }
++}))

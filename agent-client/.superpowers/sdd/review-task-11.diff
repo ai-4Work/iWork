@@ -1,0 +1,150 @@
+# Review package: 35157c3..c146d1e
+
+## Commits
+c146d1e feat: add app layout with resizable sidebar
+
+## Files changed
+ src/renderer/src/App.tsx                         | 17 +++++++++
+ src/renderer/src/components/layout/AppLayout.tsx | 44 ++++++++++++++++++++++++
+ src/renderer/src/components/sidebar/Sidebar.tsx  | 42 ++++++++++++++++++++++
+ src/renderer/src/main.tsx                        | 10 ++++++
+ 4 files changed, 113 insertions(+)
+
+## Diff
+diff --git a/src/renderer/src/App.tsx b/src/renderer/src/App.tsx
+new file mode 100644
+index 0000000..133eef0
+--- /dev/null
++++ b/src/renderer/src/App.tsx
+@@ -0,0 +1,17 @@
++import { useEffect } from 'react'
++import { useSettingsStore } from './stores/settingsStore'
++import { useConversationStore } from './stores/conversationStore'
++import { AppLayout } from './components/layout/AppLayout'
++
++export default function App() {
++  const load = useSettingsStore((s) => s.load)
++  const create = useConversationStore((s) => s.create)
++
++  useEffect(() => {
++    load()
++    // Create initial conversation if none
++    create()
++  }, [])
++
++  return <AppLayout />
++}
+diff --git a/src/renderer/src/components/layout/AppLayout.tsx b/src/renderer/src/components/layout/AppLayout.tsx
+new file mode 100644
+index 0000000..b6852ea
+--- /dev/null
++++ b/src/renderer/src/components/layout/AppLayout.tsx
+@@ -0,0 +1,44 @@
++import { useState, useCallback } from 'react'
++import { Sidebar } from '../sidebar/Sidebar'
++import { ChatPanel } from '../chat/ChatPanel'
++
++export function AppLayout() {
++  const [sidebarWidth, setSidebarWidth] = useState(320)
++  const [dragging, setDragging] = useState(false)
++
++  const handleMouseDown = useCallback(() => {
++    setDragging(true)
++  }, [])
++
++  const handleMouseMove = useCallback(
++    (e: React.MouseEvent) => {
++      if (!dragging) return
++      const newWidth = Math.max(240, Math.min(500, e.clientX))
++      setSidebarWidth(newWidth)
++    },
++    [dragging]
++  )
++
++  const handleMouseUp = useCallback(() => {
++    setDragging(false)
++  }, [])
++
++  return (
++    <div
++      className="flex h-screen select-none"
++      onMouseMove={handleMouseMove}
++      onMouseUp={handleMouseUp}
++    >
++      <div style={{ width: sidebarWidth }} className="flex-shrink-0">
++        <Sidebar />
++      </div>
++      <div
++        className="w-1 cursor-col-resize hover:bg-accent bg-transparent transition-colors flex-shrink-0"
++        onMouseDown={handleMouseDown}
++      />
++      <div className="flex-1 min-w-0">
++        <ChatPanel />
++      </div>
++    </div>
++  )
++}
+diff --git a/src/renderer/src/components/sidebar/Sidebar.tsx b/src/renderer/src/components/sidebar/Sidebar.tsx
+new file mode 100644
+index 0000000..159b0cd
+--- /dev/null
++++ b/src/renderer/src/components/sidebar/Sidebar.tsx
+@@ -0,0 +1,42 @@
++import { useState } from 'react'
++import { MessageSquare, Settings } from 'lucide-react'
++import { ConversationList } from './ConversationList'
++import { SettingsPanel } from './SettingsPanel'
++
++type Tab = 'conversations' | 'settings'
++
++export function Sidebar() {
++  const [tab, setTab] = useState<Tab>('conversations')
++
++  return (
++    <div className="h-full bg-sidebar-bg border-r border-sidebar-border flex flex-col">
++      <div className="flex border-b border-sidebar-border">
++        <button
++          onClick={() => setTab('conversations')}
++          className={`flex-1 flex items-center justify-center gap-2 py-3 text-sm transition-colors ${
++            tab === 'conversations'
++              ? 'text-accent border-b-2 border-accent'
++              : 'text-gray-400 hover:text-gray-200'
++          }`}
++        >
++          <MessageSquare size={16} />
++          对话
++        </button>
++        <button
++          onClick={() => setTab('settings')}
++          className={`flex-1 flex items-center justify-center gap-2 py-3 text-sm transition-colors ${
++            tab === 'settings'
++              ? 'text-accent border-b-2 border-accent'
++              : 'text-gray-400 hover:text-gray-200'
++          }`}
++        >
++          <Settings size={16} />
++          设置
++        </button>
++      </div>
++      <div className="flex-1 overflow-hidden">
++        {tab === 'conversations' ? <ConversationList /> : <SettingsPanel />}
++      </div>
++    </div>
++  )
++}
+diff --git a/src/renderer/src/main.tsx b/src/renderer/src/main.tsx
+new file mode 100644
+index 0000000..af83efc
+--- /dev/null
++++ b/src/renderer/src/main.tsx
+@@ -0,0 +1,10 @@
++import React from 'react'
++import ReactDOM from 'react-dom/client'
++import App from './App'
++import './styles/globals.css'
++
++ReactDOM.createRoot(document.getElementById('root')!).render(
++  <React.StrictMode>
++    <App />
++  </React.StrictMode>
++)
