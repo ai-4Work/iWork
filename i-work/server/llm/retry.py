@@ -14,7 +14,8 @@ def is_retriable(exc: Exception) -> bool:
 
 
 async def retry_with_backoff(fn, max_retries: int = 3):
-    """指数退避重试: 1s → 2s → 4s，最多 max_retries 次。
+    """指数退避重试：共 max_retries 次尝试，退避 2^n 秒（1s、2s…）。
+    最后一次不再退避，直接抛。
     非可重试异常直接 raise，不浪费尝试次数。
     """
     last_exc = None
