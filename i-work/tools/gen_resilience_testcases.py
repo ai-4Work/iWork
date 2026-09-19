@@ -3,12 +3,21 @@
 依据 docs/chapters/15-测试评估逻辑.md 第3层：异常按「故障有没有卡在某个 LLM 指令的应答上」分成两类——
 A 类（没卡上，不回灌，代码处理，确定性可断言）与 B 类（卡上了，回灌给 LLM 自决，非确定只能采样）。
 
-首轮只落 3 条，**统一用「换外部端点」这一族**（本地 stub 断开 / 429）——一个手法覆盖三条，
-区别只在断开次数。选它是因为故障落在 LLM 连接本身，任何用例都天然依赖它，
-不用编排 workspace、也不会出现「注入的东西和 prompt 对不上」：
-  R1  B 类下界——**断一次再恢复**；重试接上后 LLM 回来，中断期间那次的失败要不要回灌给它自决。
-  R2  B 类上界——**持续断开**；重试耗尽之后框架收不收住，还是空转到轮次上限。
-  R3  A 类——同一条杠杆，**持续 429**；重试耗尽后的终止与收尾，全程确定性，可进 CI 硬门禁。
+首批七条，按「人工好不好造」排序：**易造的四条在前，LLM 连接层三条在后**。
+
+前四条只需要一条命令或干脆不用造（缺依赖、死地址、缺文件、静态不一致），异常落在
+**工具 / skill 边界**上，不用改 `.env`、不用重启服务、不用编写 stub：
+  R1  缺/坏依赖族 —— pandas 当下就没装，`python -c "import pandas"` 直接复现，零制造成本。
+  R2  换外部端点族（死地址）—— 把 skill 的联网端点指到没人监听的端口，连接被动失败。
+  R3  缺/坏文件族 —— 不创建目标脚本，bash 真抛 [Errno 2]。
+  R4  制造不一致族（静态版）—— 同名目标写两处，edit_file 真报匹配不唯一。
+
+后三条统一用「换外部端点」这一族，但**作用在 LLM 连接本身**，代价高一档（改 base_url、重启服务）：
+  R5  B 类下界——**断一次再恢复**；重试接上后 LLM 回来，中断期间那次的失败要不要回灌给它自决。
+      全表唯一需要自建**有状态** stub 的一条（一次性 TCP 转发代理），人工成本最高。
+  R6  B 类上界——**持续断开**；重试耗尽之后框架收不收住，还是空转到轮次上限。
+  R7  A 类——同一条杠杆，**持续 429**；重试耗尽后的终止与收尾，全程确定性，可进 CI 硬门禁。
+      无状态 stub（永远返 429），比 R5 便宜得多。
 
 列结构与样式复刻 docs/chapters/复杂任务-内置工具+Skill测试用例.xlsx，另加一列
 「异常制造方式」：第4列写**注入什么**（Fixture），第5列写**怎么造**（打法 / 步骤 / 预期）。
@@ -31,6 +40,7 @@ B 类用例的「期望行为」一律写全三个检查点，缺一个就没法
 用法:
     python i-work/tools/gen_resilience_testcases.py
 """
+import math
 from pathlib import Path
 
 from openpyxl import Workbook
@@ -60,21 +70,142 @@ OUTPUT_NAME = "第3层-韧性测试用例.xlsx"
 SHEET_NAME = "韧性测试"
 
 # 每条用例的类别：B 类的「期望行为」必须写全三个检查点，A 类不必（它全靠确定性断言）
-CASE_CLASS = {"R1": "B（下界）", "R2": "B（上界）", "R3": "A"}
+CASE_CLASS = {
+    "R1": "B（下界）", "R2": "B（下界）", "R3": "B（下界）", "R4": "B（下界）",
+    "R5": "B（下界）", "R6": "B（上界）", "R7": "A",
+}
 
 CASE_DATA: list[list[str]] = [
-    # ── R1  B 类下界 ──────────────────────────────────────────────────────
+    # ══ 易造的四条：工具 / skill 边界，一条命令可造 ═══════════════════════
+    # ── R1  缺/坏依赖族（零制造成本） ─────────────────────────────────────
     [
         "R1",
+        "smart-charts skill 脚本（bash 子进程）+ 回灌链",
+        "skill 依赖真没装 → 脚本非零退出 → 错误回灌 → 换路",
+        "当前解释器真没装 pandas（`python -c \"import pandas\"` 报 ModuleNotFoundError）"
+        "——smart-charts 的 requirements 依赖它，环境当下就不满足。\n"
+        "workspace 放 data/2026-09/sales.csv（几行日期 + 金额）。",
+        "打法：缺/坏依赖族 —— 不装，也不人为卸载（环境本来就不满足）\n"
+        "步骤：1) 先确认 `python -c \"import pandas\"` 报错，这一步就是注入检查\n"
+        "      2) 让 agent 用 smart-charts 把 data/2026-09/sales.csv 画成柱状图"
+        "（skill 入口脚本在 bash 子进程里真 import pandas）\n"
+        "预期：脚本非零退出，stderr 含 \"ModuleNotFoundError: No module named 'pandas'\"；"
+        "该片段原样进下一轮上下文；下一轮动作与出错那次不同\n"
+        "复原：无需（本来就没装）。注意：模型可能自己 pip install pandas 装回来，"
+        "跑完要 pip uninstall -y pandas，否则这条不可重复——或整轮跑在一次性 venv 里",
+        "用 smart-charts 把 data/2026-09/sales.csv 画成一张柱状图",
+        "三个检查点：①（见 Fixture）脚本真抛的 ModuleNotFoundError 原文 → 非零退出；"
+        "②该片段是否**原样**进入下一轮上下文，不得被截断、摘要掉或静默丢弃；"
+        "③LLM 下一轮的动作与出错那次**存在差异**——自装依赖 / 换 xlsx skill / 改走内置工具，"
+        "至少一处不同。\n"
+        "Prompt 里点名 smart-charts 是刻意的：不点名时模型可能改走 xlsx skill"
+        "（openpyxl 是装着的），那条路径不触发缺依赖。\n"
+        "可见性（永不静默）：失败在 system.status / 工具结果里可见。",
+        "bash 跑 skill 入口脚本 ✗ ModuleNotFoundError（注入） → [错误原样入上下文] "
+        "→ 换路（pip install 自装 / 换 xlsx skill / 改走 read_file + 内置工具） → 结论\n"
+        "不变量：stderr 证据片段原样出现；下一轮不与出错那次同参重试。",
+        "缺依赖 / 错误回灌 / 换方案",
+        "fast + slow",
+    ],
+    # ── R2  换外部端点族·死地址（不用起 stub） ────────────────────────────
+    [
+        "R2",
+        "paddleocr-doc-parsing skill 脚本（bash 子进程）+ 回灌链",
+        "skill 联网端点不可达 → 脚本非零退出 → 错误回灌 → 换路",
+        "客户端环境里 PADDLEOCR_API_URL=http://127.0.0.1:9/v1/ocr（没人监听的端口）、"
+        "PADDLEOCR_ACCESS_TOKEN=dummy。\n"
+        "workspace 放 scans/receipt.png。",
+        "打法：换外部端点族 —— 把 skill 的联网端点指到**没人监听的端口**，让连接被动失败\n"
+        "步骤：1) 在启动客户端的环境里设 PADDLEOCR_API_URL 指向死端口"
+        "（:9 或任意未监听的高位端口）\n"
+        "      2) 要更真：直接断网（禁用网卡）或设 HTTPS_PROXY=http://127.0.0.1:9\n"
+        "      3) 让 agent 把 scans/receipt.png OCR 成文字\n"
+        "预期：parse_document.py 真抛 requests 的 ConnectionError（实测 stderr 形如 "
+        "\"Error: HTTPConnectionPool(host='127.0.0.1', port=9): Max retries exceeded …"
+        "Failed to establish a new connection\"），打到 stderr、退出码 1；"
+        "该片段原样进下一轮；下一轮动作与出错那次不同\n"
+        "复原：恢复 PADDLEOCR_API_URL",
+        "把 scans/receipt.png 里的文字提取出来",
+        "三个检查点：①（见 Fixture）脚本真抛的连接错误原文 → 非零退出；"
+        "断言取**证据片段**（\"Max retries exceeded\" / \"Failed to establish a new connection\"），"
+        "不锁死原文——真文本含 WinError 与本地化系统提示，随机器变；"
+        "②该片段是否**原样**进入下一轮上下文；"
+        "③LLM 下一轮的动作与出错那次**存在差异**——换 parse_pdf.py / 换别的本地手段 / "
+        "直接告知用户端点不可达。\n"
+        "与 R5–R7 的差别：死地址是**被动**失败，不用写 stub、不用改 .env、不用重启服务；"
+        "异常落在**工具边界**而非 LLM 应答上，回灌链更短、更好观察。\n"
+        "可见性（永不静默）：失败在 system.status / 工具结果里可见。",
+        "bash 跑 parse_document.py ✗ 连接被拒（注入） → [错误原样入上下文] "
+        "→ 换路（换 parse_pdf.py / 本地手段 / 告知端点不可达） → 结论\n"
+        "不变量：连接错误证据片段原样出现；下一轮不与出错那次同参重试；不谎报 OCR 成功。",
+        "网络不可达 / 错误回灌 / 换方案",
+        "fast + slow",
+    ],
+    # ── R3  缺/坏文件族 ──────────────────────────────────────────────────
+    [
+        "R3",
+        "内置 bash + 回灌链 + 引擎状态机",
+        "脚本真的不存在 → [Errno 2] → 错误回灌 → 换只读工具取数",
+        "workspace 有 data/2026-09/sales.csv，**刻意不建** scripts/rollup.py——这就是注入。",
+        "打法：缺/坏文件族 —— 不创建目标文件\n"
+        "步骤：1) 只放 data/2026-09/sales.csv，不建 scripts/\n"
+        "      2) 让 agent 用 scripts/rollup.py 汇总\n"
+        "预期：bash 非零退出，stderr 含 \"[Errno 2] No such file or directory\"；"
+        "该片段原样进下一轮；下一轮动作与出错那次不同\n"
+        "复原：无需（本来就没建）",
+        "用 scripts/rollup.py 把 data/2026-09/sales.csv 按月汇总，写到 report.md",
+        "三个检查点：①（见 Fixture）bash 真抛的 [Errno 2] 原文 → 非零退出；"
+        "②该片段是否**原样**进入下一轮上下文；"
+        "③LLM 下一轮的动作与出错那次**存在差异**——不再重跑同一条 bash，改走 read_file 取数。\n"
+        "断言取**证据片段**（[Errno 2] / No such file or directory），不锁死原文——"
+        "真 stderr 含解释器全路径与盘符，随机器变；这反而更贴 B3「证据充分」。\n"
+        "可见性（永不静默）：失败在 system.status / 工具结果里可见。",
+        "bash ✗ [Errno 2]（注入） → [错误原样入上下文] → 换 read_file 取数 "
+        "→ write_file 产出 report.md → 结论\n"
+        "不变量：证据片段原样出现；bash 只发一次、不原样重试；最终产物 report.md 真落盘。",
+        "缺文件 / 错误回灌 / 换方案",
+        "fast + slow",
+    ],
+    # ── R4  制造不一致族·静态版 ──────────────────────────────────────────
+    [
+        "R4",
+        "内置 edit_file + 回灌链",
+        "old_string 真匹配多处 → 编辑失败 → 错误回灌 → 重读后收窄入参",
+        "conf.yaml 里同一 key 出现两处：port: 80 / port: 8080——"
+        "文件实际内容与 LLM 以为的不一致（静态版，不用 race）。",
+        "打法：制造不一致族（静态版）—— 把同名目标写两处，让文件实际内容与 LLM 以为的不一致\n"
+        "步骤：1) 按上面写入 conf.yaml\n"
+        "      2) 让 agent 把端口改成 9000\n"
+        "预期：编辑返回「匹配到 2 处」；文件**未被改动**（失败的编辑不留半写）；"
+        "该错误原样进下一轮；下一轮动作与出错那次不同\n"
+        "复原：无需",
+        "把 conf.yaml 的端口改成 9000",
+        "三个检查点：①（见 Fixture）edit_file 真报的「匹配到 2 处」原文 → 失败返回；"
+        "②该片段是否**原样**进入下一轮上下文；"
+        "③LLM 下一轮的动作与出错那次**存在差异**——先 read_file 重读原文，再收窄 old_string 重写。\n"
+        "失败不留半写：编辑失败时 conf.yaml 内容不得被改动，这是与成功路径的分界。\n"
+        "可见性（永不静默）：失败在 system.status / 工具结果里可见。",
+        "edit_file ✗ 匹配不唯一（注入） → [错误原样入上下文] → read_file 重读原文 "
+        "→ 收窄 old_string 重写 → 结论\n"
+        "不变量：错误证据原样出现；文件在失败那轮未被改动；下一轮改入参而非原样重试。",
+        "编辑冲突 / 错误回灌 / 换方案",
+        "fast + slow",
+    ],
+    # ══ LLM 连接层三条：要改 base_url / 重启服务，代价高一档 ════════════════
+    # ── R5  B 类下界（全表唯一需自建有状态 stub 的一条） ───────────────────
+    [
+        "R5",
         "LLM 连接层（断一次后恢复）+ 引擎状态机",
         "断连一次 → 重试接上 → 中断期间的失败回灌",
         "IWORK_DEEPSEEK_BASE_URL 指向本地 stub：对**第 1 次** /v1/chat/completions "
         "直接断开（不返响应 / 流中途掐断），**第 2 次起**正常回 SSE。\n"
         "会话正常，无工具调用参与——故障只落在 LLM 应答上，无 out/。",
-        "打法：换外部端点族 —— 让 LLM 端点真的断一次\n"
-        "步骤：1) 起本地 stub：第 1 次请求直接断开，第 2 次起正常；"
-        "IWORK_DEEPSEEK_BASE_URL 指向它\n"
-        "      2) 正常发一条消息，让客户端自己退避重试\n"
+        "打法：换外部端点族 —— 让 LLM 端点只断第一次"
+        "（全表唯一需自建**有状态** stub 的一条，人工成本最高）\n"
+        "步骤：1) 起一个一次性 TCP 转发代理：accept 第 1 条连接后立即 close，"
+        "之后每条连接纯转发到真实 LLM 端点；IWORK_DEEPSEEK_BASE_URL 指向它\n"
+        "      2) 正常发一条消息，让客户端自己退避重试。"
+        "零代码兜底：发出消息后立刻断网约 2s 再恢复，近似「断一次」\n"
         "预期：断连那次真报错，退避后第 2 次尝试接上；接上后 LLM 回来，"
         "中断期间的失败进不进下一轮上下文、下一轮动作变不变，是这条要看的两点",
         "帮我把 data 下的表汇总一下，起个脚本写出来",
@@ -91,9 +222,9 @@ CASE_DATA: list[list[str]] = [
         "断连恢复 / 失败回灌 / 退避重试 / 永不静默",
         "slow",
     ],
-    # ── R2  B 类上界 ──────────────────────────────────────────────────────
+    # ── R6  B 类上界 ──────────────────────────────────────────────────────
     [
-        "R2",
+        "R6",
         "LLM 连接层（持续断开）+ 引擎状态机",
         "持续断开 → 重试耗尽 → 到顶收住",
         "IWORK_DEEPSEEK_BASE_URL 指向本地 stub：对**每一条** /v1/chat/completions "
@@ -118,9 +249,9 @@ CASE_DATA: list[list[str]] = [
         "自愈边界 / 空转检测 / 有始有终 / 状态一致性",
         "fast + slow",
     ],
-    # ── R3  A 类 ─────────────────────────────────────────────────────────
+    # ── R7  A 类 ─────────────────────────────────────────────────────────
     [
-        "R3",
+        "R7",
         "LLM 连接层（持续 429）+ 引擎状态机",
         "重试耗尽 → 终止、收尾、可见",
         "会话处于 processing，已有一条 plan_confirmed 内存态与一个已落盘的中间产物 out/part1.csv。\n"
@@ -156,8 +287,24 @@ DATA_FILL = PatternFill("solid", fgColor="FFF2F7FB")
 THIN = Side(style="thin")
 BORDER = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
 
-# 本档的行高：期望行为要装三个检查点、参考轨迹含注入点，取 90（中度档 60 / 复杂档 110）
+# 行高的**下界**（中度档 60 / 复杂档 110 是固定值）。本表不固定：R1–R4 的「异常制造方式」
+# 要装打法 / 步骤 / 预期三段，最长的折行后近 20 行，按 90 装会被裁掉——而这一列正是
+# 测试人员要照着敲的东西，裁了就白写。所以逐行按内容算高度，矮行仍保底 90 以维持原版式。
 DATA_ROW_HEIGHT = 90
+LINE_HEIGHT = 13.0      # Calibri 10 折行后每行约占的高度（pt）
+MAX_ROW_HEIGHT = 409.0  # Excel 行高上限
+
+
+def _wrapped_lines(text, col_width: int) -> int:
+    """估算一个单元格按列宽折行后占几行。中日韩字符按 2 个宽度单位算。
+
+    只是估个够用的高度，不追求和 Excel 的排版算法一致——宁可估高一点，别裁内容。
+    """
+    total = 0
+    for seg in str(text or "").split("\n"):
+        units = sum(2 if ord(ch) > 0x2E80 else 1 for ch in seg)
+        total += max(1, math.ceil(units / max(1, col_width - 1)))
+    return total
 
 
 def apply_style(ws, num_data_rows: int) -> None:
@@ -188,7 +335,13 @@ def apply_style(ws, num_data_rows: int) -> None:
                 wrap_text=True,
             )
             cell.border = BORDER
-        ws.row_dimensions[row].height = DATA_ROW_HEIGHT
+        lines = max(
+            _wrapped_lines(ws.cell(row=row, column=col).value, COLUMN_WIDTHS[col - 1])
+            for col in range(1, len(HEADERS) + 1)
+        )
+        ws.row_dimensions[row].height = min(
+            MAX_ROW_HEIGHT, max(DATA_ROW_HEIGHT, lines * LINE_HEIGHT)
+        )
 
     ws.freeze_panes = "A2"
 
@@ -214,7 +367,7 @@ def main() -> None:
 
     print(f"written: {output_path}")
     # 「异常制造方式」是给测试人员的操作指引：打法 / 步骤 / 预期缺一就没法照着敲
-    # （「复原」可选——本批三条都是 stub 端点，不落盘，没有要还原的现场）
+    # （「复原」可选——造环境类不落盘就没有要还原的现场，改了 env / 端点指向的才写）
     HOW_SECTIONS = ("打法", "步骤", "预期")
 
     for row in CASE_DATA:

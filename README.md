@@ -80,7 +80,7 @@ sequenceDiagram
 ```bash
 cd i-work
 
-python -m venv .venv && source .venv/bin/activate     # Windows: .venv\Scripts\activate
+# 需要 Python 3.12：https://www.python.org/downloads/ （Windows 装完勾选 Add to PATH）
 pip install -r requirements.txt
 
 cp .env.example .env                                   # 至少填 IWORK_DATABASE_URL 与模型 Key
@@ -90,18 +90,41 @@ cd server && alembic upgrade head && cd ..             # 建表
 python -m uvicorn server.main:app --host 127.0.0.1 --port 8000
 ```
 
-需要 Python 3.12 和一个可连的 PostgreSQL。首次启动会自动灌种子数据（默认用户、skill 与 MCP 清单、专家与专家团），表非空就跳过，可以重复启动。起来之后访问 /health 应返回 `{"status":"ok"}`，访问 /metrics 是 Prometheus 指标。
+需要一个可连的 PostgreSQL。首次启动会自动灌种子数据（默认用户、skill 与 MCP 清单、专家与专家团），表非空就跳过，可以重复启动。起来之后访问 /health 应返回 `{"status":"ok"}`，访问 /metrics 是 Prometheus 指标。
 
 ### 2. 客户端
 
 ```bash
 cd agent-client
 
+# 需要 Node.js 20.0.0+：https://nodejs.org/ （npm 随 Node 一起装）
 npm install
 cp .env.example .env        # 要用和风天气 MCP 时填 VITE_HEFENG_API_KEY
 
 npm run dev
 ```
+
+### 3. Skill 前置条件（按需）
+
+Skill 的脚本在**客户端本地**执行，所以下面这些软件与凭证都装在你自己这台机器上，不在服务端。只有下表列出的 Skill 需要准备，`weekly-report` 与 `editorial-diagrams` 装上即可用。
+
+| 技能 | 客户端要准备什么 | 一次配置 | 自检 |
+|---|---|---|---|
+| paddleocr-doc-parsing | 不用装软件，要一个 PaddleOCR 账号 | 设为系统环境变量：`PADDLEOCR_API_URL`、`PADDLEOCR_ACCESS_TOKEN`（在 paddleocr.com 注册后领取，每日有免费额度） | 没配时报错 `PADDLEOCR_API_URL and PADDLEOCR_ACCESS_TOKEN must be set` |
+| wecom-unified | Node.js，且 `wecom-cli` ≥ 1.1.0 | `npm install -g @wecom/cli`，再 `wecom-cli auth` 走一次授权 | `wecom-cli auth show --status` 输出 `authorized` |
+| obsidian-cli | Obsidian 1.12+，且**必须正在运行** | Settings > General 打开 Enable CLI；`obsidian` 需在 PATH 里（Linux 可能要包一层 wrapper 绕开 Electron 的参数注入） | `obsidian --help` |
+| browser-skill | `bsk` CLI 加配套浏览器扩展，另需一个已登录的 Chromium | 按 bsk 官方说明装 CLI 与扩展 | `bsk doctor` |
+| imap-smtp-email | Node.js + npm | 在 Skill 目录跑 `bash setup.sh`：装 npm 依赖，并把账号写进 `~/.config/mail-skills/.env`。Gmail 要用应用专用密码，网易系要用授权码而非登录密码 | `node scripts/imap.js check` |
+| smart-charts | Python 3.11+ | `pip install -r requirements.txt`（pandas、numpy、openpyxl、xlrd） | `python scripts/cli.py --doctor` |
+| image-processor | Python3 + Pillow（或 ffmpeg、ImageMagick 任一） | `pip install pillow` | `python3 scripts/process-image.py 图片.png --compress 80` |
+| summarize | Python3 + `requests`、`beautifulsoup4`（只有网页摘要用到） | `pip install requests beautifulsoup4` | `python summarize.py "一段测试文本"` |
+| docx / pptx / xlsx / pdf | 命令行工具 pandoc、LibreOffice、Poppler（`pdftoppm`）；Node 全局包；Python 包 | `npm i -g docx pptxgenjs`；`pip install pypdf pdfplumber reportlab pillow "markitdown[pptx]"`；扫描件 OCR 另需 `pip install pytesseract pdf2image` | pandoc 抽一次文本，或 soffice 转一次 PDF |
+
+三点注意：
+
+- 办公四件套的 LibreOffice 不是锦上添花：xlsx 公式重算、docx/pptx 转 PDF 都靠它。只做纯文本抽取可以先不装。
+- 上表的配置与自检命令都在 Skill 目录里跑。Skill 装上后解压到 `~/.iwork/skills/<skill_name>/`，先 `cd` 进去再执行。
+- 环境变量走**系统环境**（Windows 用 `setx`，macOS/Linux 写进 shell profile），不要写进 `agent-client/.env` —— 那份 `.env` 是构建期注入渲染进程的 `VITE_` 变量，Skill 脚本读的是子进程环境变量，读不到。Windows 上 `setx` 完不用重启客户端，客户端每次执行命令会重读注册表。
 
 
 

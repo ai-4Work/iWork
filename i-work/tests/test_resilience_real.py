@@ -5,12 +5,14 @@
 
     ① 工具产出可判的错误  →  ② 该错误原样进入下一轮上下文  →  ③ 下一轮动作变
 
-本文件覆盖第3层 B 类（下界）三条真实杠杆，外加 R3（A 类，真 429 端点）：
+本文件覆盖第3层 R1–R4（B 类下界，工具 / skill 边界的四条真实杠杆），
+外加 R7（A 类，真 429 端点）。编号与 `第3层-韧性测试用例.xlsx` 对齐：
 
-    test_skill_script_missing_dependency   #7 Skill 脚本失败（缺/坏依赖族）
-    test_bash_missing_file_then_switch     R1 内置工具失败（缺/坏文件族）
-    test_edit_file_ambiguous_match         #4 编辑类失败（制造不一致族）
-    test_llm_429_retry_exhausted           R3 LLM 端点持续 429 → 重试耗尽
+    test_skill_script_missing_dependency   R1 skill 缺依赖（缺/坏依赖族）
+    test_skill_network_unreachable         R2 skill 网络断开（换外部端点族·死地址）
+    test_bash_missing_file_then_switch     R3 目标文件缺失（缺/坏文件族）
+    test_edit_file_ambiguous_match         R4 编辑目标不唯一（制造不一致族·静态版）
+    test_llm_429_retry_exhausted           R7 LLM 端点持续 429 → 重试耗尽
 
 L2 的边界（别夸大）
 -------------------
@@ -22,6 +24,7 @@ L2 的边界（别夸大）
 import http.server
 import threading
 import time
+from pathlib import Path
 
 import httpx
 import pytest
@@ -128,7 +131,7 @@ async def test_executor_success_baseline(session_repo, message_repo, tmp_path, f
 
 
 # ══════════════════════════════════════════════════════════════════
-# #7 Skill 脚本失败：缺依赖（零制造成本，环境当下就不满足）
+# R1 Skill 脚本失败：缺依赖（零制造成本，环境当下就不满足）
 # ══════════════════════════════════════════════════════════════════
 
 @pytest.mark.asyncio
@@ -177,7 +180,67 @@ async def test_skill_script_missing_dependency(session_repo, message_repo, tmp_p
 
 
 # ══════════════════════════════════════════════════════════════════
-# R1 内置工具失败：文件真的不存在
+# R2 Skill 脚本失败：联网端点不可达（换外部端点族·死地址）
+# ══════════════════════════════════════════════════════════════════
+
+# 没人监听的端口：连它立刻 Connection refused。死地址是**被动**失败——不用起 stub、
+# 不用真断网、不用改 .env 重启服务，这是它比 R5–R7 好造的地方。
+DEAD_ENDPOINT = "http://127.0.0.1:9/v1/ocr"
+
+# 跑的是**真** skill 脚本，不是替身：它自己读 PADDLEOCR_API_URL、自己发请求、自己 exit(1)。
+SKILL_SCRIPT = (
+    Path(__file__).resolve().parent.parent
+    / "server" / "skills" / "definitions" / "paddleocr-doc-parsing"
+    / "scripts" / "parse_document.py"
+)
+
+
+@pytest.mark.asyncio
+async def test_skill_network_unreachable(session_repo, message_repo, tmp_path, fake_llm, monkeypatch):
+    """跑真 skill 脚本 → 联网端点死地址 → 真连接错误 → 进上下文 → 换路。
+
+    与 R1 的分界：故障不在依赖也不在文件——脚本在、requests 也装着，只有**端点不可达**。
+    断言取证据片段（`Max retries exceeded` / `Failed to establish a new connection`），
+    不锁原文：真文本含 WinError 与本地化系统提示，随机器变。
+    """
+    monkeypatch.setenv("PADDLEOCR_API_URL", DEAD_ENDPOINT)
+    monkeypatch.setenv("PADDLEOCR_ACCESS_TOKEN", "dummy")
+    (tmp_path / "scans").mkdir()
+    (tmp_path / "scans" / "receipt.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+
+    fake_llm.responses = [
+        [LLMChunk(type="tool_use", tool_name="bash", tool_call_id="tc1",
+                  tool_input={"command": f'python "{SKILL_SCRIPT}" scans/receipt.png'})],
+        [LLMChunk(type="tool_use", tool_name="read_file", tool_call_id="tc2",
+                  tool_input={"path": "scans/receipt.png"})],
+        [LLMChunk(type="text", delta="OCR 端点不可达，改走本地手段。"),
+         LLMChunk(type="end_turn", stop_reason="end_turn")],
+    ]
+
+    session, engine, executor = await _build(session_repo, message_repo, fake_llm, tmp_path)
+    try:
+        await _enqueue(engine, "把 scans/receipt.png 里的文字提取出来")
+        assert await executor.wait_idle(), f"未回到 IDLE，state={engine.state}"
+
+        # ① 真连接失败，证据可判
+        body = executor.results[0][1]
+        assert body["status"] == "error"
+        assert body["exit_code"] == 1
+        assert "Max retries exceeded" in body["error"]
+        assert "Failed to establish a new connection" in body["error"]
+
+        # ② 原样进下一轮上下文，未被吞
+        tool_rows = _tool_history(await message_repo.get_history(session.id))
+        assert any("Max retries exceeded" in c for c in tool_rows)
+
+        # ③ 换路：不再跑同一条 bash，改走别的工具；且不谎报 OCR 成功
+        assert [r["tool_name"] for r in executor.requests] == ["bash", "read_file"]
+    finally:
+        await executor.stop()
+
+
+# ══════════════════════════════════════════════════════════════════
+# R3 内置工具失败：文件真的不存在
 # ══════════════════════════════════════════════════════════════════
 
 @pytest.mark.asyncio
@@ -223,7 +286,7 @@ async def test_bash_missing_file_then_switch(session_repo, message_repo, tmp_pat
 
 
 # ══════════════════════════════════════════════════════════════════
-# #4 编辑类失败：old_string 真的匹配到多处
+# R4 编辑类失败：old_string 真的匹配到多处
 # ══════════════════════════════════════════════════════════════════
 
 @pytest.mark.asyncio
@@ -261,7 +324,7 @@ async def test_edit_file_ambiguous_match(session_repo, message_repo, tmp_path, f
 
 
 # ══════════════════════════════════════════════════════════════════
-# R3 LLM 端点持续 429：重试耗尽（A 类，确定性，可进 CI 门禁）
+# R7 LLM 端点持续 429：重试耗尽（A 类，确定性，可进 CI 门禁）
 # ══════════════════════════════════════════════════════════════════
 
 class _Always429(http.server.BaseHTTPRequestHandler):
