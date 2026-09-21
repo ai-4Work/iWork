@@ -38,6 +38,20 @@ class OrmUser(Base):
     display_name: Mapped[Optional[str]] = mapped_column(
         String(200), comment="显示名称",
     )
+    password_hash: Mapped[Optional[str]] = mapped_column(
+        String(200), comment="bcrypt 哈希；NULL = 不可密码登录（如 default-user 初始态）",
+    )
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default="active",
+        comment="active | disabled；仅管理员态，到期自解的自动锁定走 locked_until",
+    )
+    failed_login_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0",
+        comment="连续登录失败次数；登录成功或锁定期满即清零",
+    )
+    locked_until: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), comment="自动锁定截止时间；NULL = 未锁定",
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(),
         comment="创建时间",
@@ -45,6 +59,103 @@ class OrmUser(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(),
         comment="最后更新时间",
+    )
+
+
+# ═══════════════════════════════════════════════════════════════
+# 1b. Refresh Tokens（doc 18-12.3）
+# ═══════════════════════════════════════════════════════════════
+
+class OrmRefreshToken(Base):
+    """refresh token 表：不透明随机串，存 sha256 哈希。
+
+    只用 sha256 不用 bcrypt：32 字节随机串熵已足够，慢哈希只会白白拖慢每次刷新。
+    刻意不设 `revoked` 布尔 —— `revoked_at IS NULL` 就是"未吊销"，
+    两者并存会出现互相矛盾的状态。
+    """
+
+    __tablename__ = "refresh_tokens"
+
+    id: Mapped[_uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=_uuid.uuid4,
+        comment="token ID",
+    )
+    user_id: Mapped[_uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False, comment="所属用户",
+    )
+    token_hash: Mapped[str] = mapped_column(
+        String(64), nullable=False, unique=True,
+        comment="sha256 哈希后的 token（明文绝不落库）",
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, comment="过期时间",
+    )
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        comment="吊销时间；NULL = 未吊销。宽限期据它判断（doc 8.4）",
+    )
+    rotated_to: Mapped[Optional[_uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), comment="轮换后的新 token id，只作轮换链审计",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(),
+        comment="签发时间",
+    )
+
+    __table_args__ = (
+        Index("idx_refresh_tokens_user", "user_id"),
+        {"comment": "Refresh Token 表：可吊销的长期凭证，一次一换"},
+    )
+
+
+# ═══════════════════════════════════════════════════════════════
+# 1c. 登录日志（doc 18-12.4）
+# ═══════════════════════════════════════════════════════════════
+
+class OrmLoginLog(Base):
+    """登录审计日志。
+
+    **本表只做审计，锁定判断不依赖它** —— 锁定状态由 users.failed_login_count /
+    locked_until 承载。写入是 best-effort，失败不能阻断登录。
+    """
+
+    __tablename__ = "login_logs"
+
+    id: Mapped[int] = mapped_column(
+        BigInteger, primary_key=True, autoincrement=True, comment="自增主键",
+    )
+    user_id: Mapped[Optional[_uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True, comment="用户；密码错或账号不存在时为 NULL",
+    )
+    attempt_username: Mapped[str] = mapped_column(
+        String(100), nullable=False, server_default="",
+        comment="本次尝试的账号（用于排查爆破）",
+    )
+    ip: Mapped[Optional[str]] = mapped_column(
+        String(45), comment="来源 IP",
+    )
+    user_agent: Mapped[Optional[str]] = mapped_column(
+        Text, comment="客户端信息",
+    )
+    result: Mapped[str] = mapped_column(
+        String(20), nullable=False, comment="success | fail",
+    )
+    reason: Mapped[str] = mapped_column(
+        String(50), nullable=False, server_default="", comment="失败原因（错误码）",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(),
+        comment="时间",
+    )
+
+    __table_args__ = (
+        Index("idx_login_logs_created", "created_at"),
+        Index("idx_login_logs_user", "user_id", "created_at"),
+        {"comment": "登录日志表：只做审计，锁定判断不依赖它"},
     )
 
 

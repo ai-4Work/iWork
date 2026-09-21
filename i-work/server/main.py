@@ -10,7 +10,7 @@ load_dotenv()
 from fastapi import FastAPI, Request
 from fastapi.responses import Response, PlainTextResponse
 
-from server.config import settings
+from server.config import settings, validate_auth_config
 from server.llm.client import FakeLLMClient
 from server.engine.query_loop import EngineManager
 
@@ -63,6 +63,8 @@ async def lifespan(app: FastAPI):
     )
     if not settings.database_url:
         raise RuntimeError("IWORK_DATABASE_URL 未配置：请在 i-work/.env 中设置（参考 .env.example）")
+    # JWT 密钥不足 32 字节直接拒绝启动（doc 8.10）
+    validate_auth_config()
     engine, session_factory = create_engine(settings.database_url)
     app.state.db_session_factory = session_factory
     app.state.db_engine = engine
@@ -71,11 +73,16 @@ async def lifespan(app: FastAPI):
     audit_subscriber.db_factory = session_factory
 
     # ── 2. 种子数据 ──
+    # default-user 只在库里存在、不再被任何接口当作身份使用 —— 它是存量数据的
+    # owner，给它设密码后仍可登录查看（见 18-登录认证模块 ch.14）。
     user_repo = UserRepo(session_factory)
-    default_user = await user_repo.get_or_create_default()
-    app.state.default_user_id = default_user.id
+    await user_repo.get_or_create_default()
     await seed_hub_data(session_factory)
     await seed_expert_hub_data(session_factory)
+
+    # ── 2.5 认证 ──
+    from server.auth.service import AuthService
+    app.state.auth_service = AuthService(session_factory)
 
     # ── 3. PG repos ──
     session_repo = PgSessionRepo(session_factory)
@@ -321,6 +328,8 @@ from server.api.routes import (
 from server.api.mcp_routes import router_mcp
 from server.api.skill_routes import router_skill
 from server.api.agent_routes import router_agents
+from server.api.auth_routes import router_auth
+app.include_router(router_auth)
 app.include_router(router_agents)
 app.include_router(router_sessions)
 app.include_router(router)

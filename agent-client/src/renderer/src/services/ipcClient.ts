@@ -24,11 +24,15 @@ function getAPI() {
         load: async () => ({
           apiBaseUrl: '',
           apiKey: '',
-          userId: '',
           model: 'deepseek-v4-pro',
           workspacePath: '',
           fullAccess: false
         } as Settings)
+      },
+      auth: {
+        save: async () => {},
+        load: async () => null,
+        clear: async () => {}
       },
       storage: {
         get: async () => null,

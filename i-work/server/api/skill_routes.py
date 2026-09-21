@@ -26,7 +26,7 @@ from fastapi.responses import Response
 
 from server.models.message import SkillInstallRequest, SkillCustomCreate, SkillCustomUpdate
 from server.skills.skill_registry import SkillDefinition
-from server.api.deps import get_default_user_id, get_db
+from server.api.deps import get_current_user, get_db
 from server.observability.audit import audit_log
 
 logger = logging.getLogger("iwork.api.skills")
@@ -112,7 +112,7 @@ async def delete_hub_skill(skill_id: str, request: Request):
 # ═══════════════════════════════════════════════════════════════
 
 @router_skill.get("/installed")
-async def list_installed(request: Request, user_id: UUID = Depends(get_default_user_id)):
+async def list_installed(request: Request, user_id: UUID = Depends(get_current_user)):
     """获取已安装的 Skill 完整信息。"""
     registry = _get_skill_registry(request)
     skills = await registry.get_installed_skills(user_id)
@@ -142,7 +142,7 @@ async def list_installed(request: Request, user_id: UUID = Depends(get_default_u
 async def install_skill(
     body: SkillInstallRequest,
     request: Request,
-    user_id: UUID = Depends(get_default_user_id),
+    user_id: UUID = Depends(get_current_user),
     db=Depends(get_db),
 ):
     """安装 Hub 中的 Skill。登记安装 + 返回 skill 目录的 zip 包。"""
@@ -221,7 +221,7 @@ async def install_skill(
 async def uninstall_skill(
     skill_id: str,
     request: Request,
-    user_id: UUID = Depends(get_default_user_id),
+    user_id: UUID = Depends(get_current_user),
 ):
     """卸载已安装的 Skill（内置 Skill 不可卸载）。"""
     registry = _get_skill_registry(request)
@@ -236,7 +236,7 @@ async def uninstall_skill(
 # ═══════════════════════════════════════════════════════════════
 
 @router_skill.get("/custom")
-async def list_custom(request: Request, user_id: UUID = Depends(get_default_user_id)):
+async def list_custom(request: Request, user_id: UUID = Depends(get_current_user)):
     """获取自定义 Skill 列表。"""
     registry = _get_skill_registry(request)
     skills = await registry.get_custom_skills(user_id)
@@ -251,7 +251,7 @@ async def list_custom(request: Request, user_id: UUID = Depends(get_default_user
 async def create_custom(
     body: SkillCustomCreate,
     request: Request,
-    user_id: UUID = Depends(get_default_user_id),
+    user_id: UUID = Depends(get_current_user),
 ):
     """创建自定义 Skill（自动生成 cs 前缀 ID 并自动安装）。"""
     registry = _get_skill_registry(request)
@@ -279,7 +279,7 @@ async def update_custom(
     skill_id: str,
     body: SkillCustomUpdate,
     request: Request,
-    user_id: UUID = Depends(get_default_user_id),
+    user_id: UUID = Depends(get_current_user),
 ):
     """更新自定义 Skill。"""
     registry = _get_skill_registry(request)
@@ -304,7 +304,7 @@ async def update_custom(
 async def delete_custom(
     skill_id: str,
     request: Request,
-    user_id: UUID = Depends(get_default_user_id),
+    user_id: UUID = Depends(get_current_user),
 ):
     """删除自定义 Skill（同时卸载）。"""
     registry = _get_skill_registry(request)

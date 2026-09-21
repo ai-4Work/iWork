@@ -4,7 +4,6 @@ import Store from 'electron-store'
 interface StoredSettings {
   apiBaseUrl: string
   apiKey: string
-  userId?: string
   model: string
   workspacePath: string
   fullAccess: boolean
@@ -20,7 +19,6 @@ interface StoredSettings {
 const defaults: StoredSettings = {
   apiBaseUrl: '',
   apiKey: '',
-  userId: '',
   model: 'deepseek-v4-pro',
   workspacePath: '',
   fullAccess: false,

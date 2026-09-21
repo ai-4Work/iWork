@@ -22,7 +22,7 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, Request, Depends
 
 from server.models.message import MCPInstallRequest, MCPCustomCreate
-from server.api.deps import get_default_user_id, get_db
+from server.api.deps import get_current_user, get_db
 from server.storage.postgres import McpHubRepo, UserMcpRepo
 from server.observability.audit import audit_log
 
@@ -94,7 +94,7 @@ async def delete_hub(server_id: str, request: Request):
 @router_mcp.get("/installed")
 async def list_installed(
     request: Request,
-    user_id: UUID = Depends(get_default_user_id),
+    user_id: UUID = Depends(get_current_user),
 ):
     repo = _get_user_mcp_repo(request)
     return {"installed": await repo.get_installed(user_id)}
@@ -108,7 +108,7 @@ async def list_installed(
 async def install_mcp(
     body: MCPInstallRequest,
     request: Request,
-    user_id: UUID = Depends(get_default_user_id),
+    user_id: UUID = Depends(get_current_user),
     db=Depends(get_db),
 ):
     hub = _get_hub_repo(request)
@@ -161,7 +161,7 @@ async def install_mcp(
 async def uninstall_mcp(
     server_id: str,
     request: Request,
-    user_id: UUID = Depends(get_default_user_id),
+    user_id: UUID = Depends(get_current_user),
 ):
     repo = _get_user_mcp_repo(request)
     if not await repo.is_installed(user_id, server_id):
@@ -177,21 +177,17 @@ async def uninstall_mcp(
 # ═══════════════════════════════════════════════════════════════
 
 @router_mcp.post("/tools")
-async def report_mcp_tools(body: dict, request: Request):
-    """客户端发现 MCP 工具后上报（安装/卸载后）。user_id 由客户端在 body 中传入。"""
-    user_id_raw = body.get("user_id")
+async def report_mcp_tools(
+    body: dict,
+    request: Request,
+    user_id: UUID = Depends(get_current_user),
+):
+    """客户端发现 MCP 工具后上报（安装/卸载后）。身份从 access token 取。"""
     server_id = body.get("server_id")
     tools: list[dict] = body.get("tools", [])
 
-    if not user_id_raw:
-        raise HTTPException(400, detail={"error": "invalid_request", "message": "user_id 不能为空"})
     if not server_id:
         raise HTTPException(400, detail={"error": "invalid_request", "message": "server_id 不能为空"})
-
-    try:
-        user_id = UUID(user_id_raw)
-    except (ValueError, TypeError, AttributeError):
-        raise HTTPException(400, detail={"error": "invalid_request", "message": "user_id 格式不合法"})
 
     repo = _get_user_mcp_repo(request)
     await repo.save_tools(user_id, server_id, tools)
@@ -210,7 +206,7 @@ async def report_mcp_tools(body: dict, request: Request):
 @router_mcp.get("/custom")
 async def list_custom(
     request: Request,
-    user_id: UUID = Depends(get_default_user_id),
+    user_id: UUID = Depends(get_current_user),
 ):
     repo = _get_user_mcp_repo(request)
     return {"custom": await repo.get_custom(user_id)}
@@ -224,7 +220,7 @@ async def list_custom(
 async def create_custom(
     body: MCPCustomCreate,
     request: Request,
-    user_id: UUID = Depends(get_default_user_id),
+    user_id: UUID = Depends(get_current_user),
 ):
     repo = _get_user_mcp_repo(request)
     entry = body.model_dump()
@@ -241,7 +237,7 @@ async def create_custom(
 async def delete_custom(
     server_id: str,
     request: Request,
-    user_id: UUID = Depends(get_default_user_id),
+    user_id: UUID = Depends(get_current_user),
 ):
     repo = _get_user_mcp_repo(request)
     ok = await repo.delete_custom(user_id, server_id)

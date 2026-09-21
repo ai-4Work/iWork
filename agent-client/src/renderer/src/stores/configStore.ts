@@ -524,17 +524,11 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
         }
       }))
 
-      // 5. Report tools to the backend (uses userId from settings)
-      const userId = useSettingsStore.getState().settings.userId || '00000000-0000-0000-0000-000000000001'
-      if (userId) {
-        // console.log(`[installMcp] Reporting ${tools.length} tools for server ${serverId}, user ${userId}`)
-        try {
-          await reportMcpTools(userId, serverId, tools)
-        } catch (err) {
-          console.error(`Failed to report tools for ${serverId}:`, err)
-        }
-      } else {
-        console.warn(`[installMcp] No userId configured, skipping tool report`)
+      // 5. Report tools to the backend — 身份由 access token 承载，不再传 user_id
+      try {
+        await reportMcpTools(serverId, tools)
+      } catch (err) {
+        console.error(`Failed to report tools for ${serverId}:`, err)
       }
 
       await get().loadInstalledMcps()
@@ -634,14 +628,12 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
   // Report all connected MCP tools for the current user
   reportMcpToolsToSession: async () => {
     const { mcpConnectionStatuses, mcpDiscoveredTools } = get()
-    const userId = useSettingsStore.getState().settings.userId
-    if (!userId) return
 
     for (const [serverId, status] of Object.entries(mcpConnectionStatuses)) {
       if (status.status === 'connected') {
         const tools = mcpDiscoveredTools[serverId] || []
         try {
-          await reportMcpTools(userId, serverId, tools)
+          await reportMcpTools(serverId, tools)
         } catch (err) {
           console.error(`Failed to report tools for ${serverId}:`, err)
         }

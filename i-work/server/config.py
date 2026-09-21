@@ -159,6 +159,23 @@ class Settings(BaseSettings):
     # 使用: 当前代码未引用，预留
     port: int = 8000
 
+    # ── 认证（docs/chapters/18-登录认证模块） ──
+    # JWT 签名密钥（HS256）。必填，且至少 32 字节 —— 短密钥可被暴力破解。
+    # 校验放在启动路径（validate_auth_config），不放在模块 import 处：
+    # alembic 也 import 本模块，放这里会让"还没设密钥就迁移不了"。
+    jwt_secret: str = ""
+    # access token 有效期（分钟）
+    auth_access_ttl_minutes: int = 15
+    # refresh token 有效期（天）。每次轮换按 now + 此值重算，即滑动续期
+    auth_refresh_ttl_days: int = 7
+    # 连续登录失败几次触发锁定
+    auth_max_failed_logins: int = 5
+    # 触发锁定后锁多久（分钟）
+    auth_lockout_minutes: int = 15
+    # 轮换宽限期（秒）：旧 refresh token 吊销后这段时间内仍接受。
+    # 客户端刷新响应丢失后会带旧 token 重试，直接判重放会把人误踢下线
+    auth_refresh_grace_seconds: int = 30
+
     # ── 数据库 ──
     # 异步 SQLAlchemy 连接串（asyncpg 驱动），必填，由 IWORK_DATABASE_URL 提供
     # （本地写在 i-work/.env，参考 .env.example；不入库）。为空则启动直接报错。
@@ -192,3 +209,12 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def validate_auth_config() -> None:
+    """启动时校验认证配置，不满足直接拒绝启动（doc 8.10）。"""
+    if len(settings.jwt_secret.encode("utf-8")) < 32:
+        raise RuntimeError(
+            "IWORK_JWT_SECRET 未配置或不足 32 字节：HS256 密钥至少 256 位随机。"
+            "生成方式：python -c \"import secrets; print(secrets.token_urlsafe(32))\""
+        )

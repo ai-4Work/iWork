@@ -33,6 +33,11 @@ const api = {
     save: (settings: unknown) => ipcRenderer.invoke('settings:save', settings),
     load: () => ipcRenderer.invoke('settings:load')
   },
+  auth: {
+    save: (tokens: unknown) => ipcRenderer.invoke('auth:save', tokens),
+    load: () => ipcRenderer.invoke('auth:load'),
+    clear: () => ipcRenderer.invoke('auth:clear')
+  },
   storage: {
     get: (ns: string, key: string) => ipcRenderer.invoke('storage:get', ns, key),
     set: (ns: string, key: string, value: unknown) => ipcRenderer.invoke('storage:set', ns, key, value)

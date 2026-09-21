@@ -1,6 +1,7 @@
 import { useTaskStore } from '../../stores/taskStore'
 import { useChatStore } from '../../stores/chatStore'
 import { activateTask } from '../../stores/persistence'
+import { useAuthStore } from '../../stores/authStore'
 import { Plus } from 'lucide-react'
 
 type ConfigPage = 'skills' | 'mcp' | 'memory' | 'expert'
@@ -12,6 +13,8 @@ interface Props {
 }
 
 export function Sidebar({ onOpenConfig, onCloseConfig, activeConfig }: Props) {
+  const user = useAuthStore((s) => s.user)
+  const logout = useAuthStore((s) => s.logout)
   const tasks = useTaskStore((s) => s.tasks)
   const currentId = useTaskStore((s) => s.currentTaskId)
   const create = useTaskStore((s) => s.create)
@@ -149,7 +152,15 @@ export function Sidebar({ onOpenConfig, onCloseConfig, activeConfig }: Props) {
         <div className="w-[26px] h-[26px] rounded-full bg-[#a7f3d0] flex items-center justify-center flex-shrink-0 text-[#047857] text-xs font-semibold">
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="8" cy="5" r="3" /><path d="M2 14c0-3.3 2.7-6 6-6s6 2.7 6 6" /></svg>
         </div>
-        <span>ZLL</span>
+        <span className="flex-1 truncate" title={user?.username}>{user?.display_name || user?.username || ''}</span>
+        <button
+          onClick={logout}
+          title="退出登录"
+          className="flex items-center gap-1 flex-shrink-0 px-2 py-1 rounded-md border-none bg-none font-sans text-xs text-sidebar-text-dim cursor-pointer hover:bg-sidebar-hover hover:text-[#0f172a]"
+        >
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M6 14H3.5A1.5 1.5 0 0 1 2 12.5v-9A1.5 1.5 0 0 1 3.5 2H6" /><path d="M10.5 11 14 8l-3.5-3" /><path d="M14 8H6" /></svg>
+          退出
+        </button>
       </div>
     </aside>
   )

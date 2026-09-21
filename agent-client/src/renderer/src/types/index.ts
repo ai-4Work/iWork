@@ -110,8 +110,8 @@ export interface Task {
 // ===== Settings =====
 export interface Settings {
   apiBaseUrl: string
+  /** 旧字段：保留但不再用于请求，鉴权一律走 access token */
   apiKey: string
-  userId: string
   model: string
   workspacePath: string
   fullAccess: boolean
@@ -121,7 +121,6 @@ export interface Settings {
 export const DEFAULT_SETTINGS: Settings = {
   apiBaseUrl: '',
   apiKey: '',
-  userId: '',
   model: '/projects/data-report',
   workspacePath: '',
   fullAccess: false,
@@ -453,6 +452,13 @@ export interface Command {
 }
 
 // ===== Electron API =====
+/** 主进程留存的登录凭证。expiresAt 是 access token 过期时刻（epoch ms）。 */
+export interface StoredTokens {
+  accessToken: string
+  refreshToken: string
+  expiresAt: number
+}
+
 /** MCP 工具执行结果 + 本次实际是否在 OS 写墙沙箱中运行（受限 stdio → true；stdio 直连/http/sse → false） */
 export interface McpCallResult {
   result: unknown
@@ -479,6 +485,12 @@ export interface ElectronAPI {
   settings: {
     save: (settings: Settings) => Promise<void>
     load: () => Promise<Settings>
+  }
+  /** 登录凭证：只落主进程，safeStorage 加密后进 electron-store（doc 18-10.3）。 */
+  auth: {
+    save: (tokens: StoredTokens) => Promise<void>
+    load: () => Promise<StoredTokens | null>
+    clear: () => Promise<void>
   }
   /** M5：渲染层通用本地持久化（消息骨架/outbox）。ns 为命名空间，key 为该项键。 */
   storage: {

@@ -1,5 +1,7 @@
 import type { ServerEvent, AppMode, SceneMode, McpHubServer, McpInstalledServer, CustomMcpServer, CreateCustomMcpRequest, HubSkill, InstalledSkill, CustomSkillDef, CreateCustomSkillRequest, McpInstallResponse, McpToolDef, SkillInstallResult, L1MemoryItem, L2SceneItem, L3PersonaItem, RuleItem, Expert, Team, NetworkApproval, PolicyPacket, McpCallResult, SideEffectItem } from '../types'
 import { useSettingsStore } from '../stores/settingsStore'
+import { useAuthStore } from '../stores/authStore'
+import { authedFetch } from './authFetch'
 import { parseNDJSONStream } from './ndjson'
 import { ipcClient } from './ipcClient'
 
@@ -369,11 +371,11 @@ export async function createSession(req: CreateSessionRequest): Promise<CreateSe
   console.log('[createSession] shell_env =', JSON.stringify(shellEnv))
   console.log('[createSession] send params:', JSON.stringify({ ...req, shell_env: shellEnv }))
 
-  const response = await fetch(url, {
+  const response = await authedFetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: settings.apiKey ? `Bearer ${settings.apiKey}` : ''
+      ...getAuthHeaders()
     },
     body: JSON.stringify({ ...req, shell_env: shellEnv })
   })
@@ -440,7 +442,7 @@ export async function sendChatMessage(opts: ChatStreamOptions): Promise<void> {
   const headers = {
     'Content-Type': 'application/json',
     "Accept": "application/json, text/event-stream",
-    Authorization: settings.apiKey ? `Bearer ${settings.apiKey}` : ''
+    ...getAuthHeaders()
   }
   const body = JSON.stringify({
     content: opts.content,
@@ -459,7 +461,7 @@ export async function sendChatMessage(opts: ChatStreamOptions): Promise<void> {
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     let receivedAny = false
     try {
-      const response = await fetch(url, { method: 'POST', headers, body })
+      const response = await authedFetch(url, { method: 'POST', headers, body })
 
       if (!response.ok) {
         const errBody = await response.text().catch(() => '')
@@ -521,9 +523,9 @@ export async function reconnectStream(
   const url = `${baseUrl}/sessions/${sessionId}/stream?since_seq=${sinceSeq}`
 
   try {
-    const response = await fetch(url, {
+    const response = await authedFetch(url, {
       headers: {
-        Authorization: settings.apiKey ? `Bearer ${settings.apiKey}` : ''
+        ...getAuthHeaders()
       }
     })
 
@@ -569,8 +571,8 @@ export interface SessionStateInfo {
 export async function fetchSessionState(sessionId: string): Promise<SessionStateInfo> {
   const settings = useSettingsStore.getState().settings
   const baseUrl = settings.apiBaseUrl || DEFAULT_BASE_URL
-  const response = await fetch(`${baseUrl}/sessions/${sessionId}/state`, {
-    headers: { Authorization: settings.apiKey ? `Bearer ${settings.apiKey}` : '' }
+  const response = await authedFetch(`${baseUrl}/sessions/${sessionId}/state`, {
+    headers: { ...getAuthHeaders() }
   })
   if (!response.ok) throw new Error(`State error: ${response.status}`)
   return await response.json()
@@ -618,8 +620,8 @@ export interface SessionMessagesResponse {
 export async function fetchSessionMessages(sessionId: string): Promise<SessionMessagesResponse> {
   const settings = useSettingsStore.getState().settings
   const baseUrl = settings.apiBaseUrl || DEFAULT_BASE_URL
-  const response = await fetch(`${baseUrl}/sessions/${sessionId}/messages`, {
-    headers: { Authorization: settings.apiKey ? `Bearer ${settings.apiKey}` : '' }
+  const response = await authedFetch(`${baseUrl}/sessions/${sessionId}/messages`, {
+    headers: { ...getAuthHeaders() }
   })
   if (!response.ok) throw new Error(`History error: ${response.status}`)
   return await response.json()
@@ -640,8 +642,8 @@ export interface SessionAgentsResponse {
 export async function fetchSessionAgents(sessionId: string): Promise<SessionAgentsResponse> {
   const settings = useSettingsStore.getState().settings
   const baseUrl = settings.apiBaseUrl || DEFAULT_BASE_URL
-  const response = await fetch(`${baseUrl}/sessions/${sessionId}/agents`, {
-    headers: { Authorization: settings.apiKey ? `Bearer ${settings.apiKey}` : '' }
+  const response = await authedFetch(`${baseUrl}/sessions/${sessionId}/agents`, {
+    headers: { ...getAuthHeaders() }
   })
   if (!response.ok) throw new Error(`Agents error: ${response.status}`)
   return await response.json()
@@ -658,8 +660,8 @@ export interface SessionEffectsResponse {
 export async function fetchSessionEffects(sessionId: string): Promise<SessionEffectsResponse> {
   const settings = useSettingsStore.getState().settings
   const baseUrl = settings.apiBaseUrl || DEFAULT_BASE_URL
-  const response = await fetch(`${baseUrl}/sessions/${sessionId}/effects`, {
-    headers: { Authorization: settings.apiKey ? `Bearer ${settings.apiKey}` : '' }
+  const response = await authedFetch(`${baseUrl}/sessions/${sessionId}/effects`, {
+    headers: { ...getAuthHeaders() }
   })
   if (!response.ok) throw new Error(`Effects error: ${response.status}`)
   return await response.json()
@@ -698,11 +700,11 @@ export async function reprocessMessage(opts: ReprocessMessageOptions): Promise<v
   const url = `${baseUrl}/sessions/${opts.sessionId}/messages/${opts.messageId}/${opts.mode}`
 
   try {
-    const response = await fetch(url, {
+    const response = await authedFetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: settings.apiKey ? `Bearer ${settings.apiKey}` : ''
+        ...getAuthHeaders()
       },
       body: JSON.stringify({ client_message_id: opts.clientMessageId ?? null })
     })
@@ -752,11 +754,11 @@ async function planAction(sessionId: string, action: 'confirm' | 'edit' | 'answe
   const baseUrl = settings.apiBaseUrl || DEFAULT_BASE_URL
   const url = `${baseUrl}/sessions/${sessionId}/plan/${action}`
 
-  const response = await fetch(url, {
+  const response = await authedFetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: settings.apiKey ? `Bearer ${settings.apiKey}` : ''
+      ...getAuthHeaders()
     },
     body: body ? JSON.stringify(body) : undefined
   })
@@ -780,11 +782,11 @@ async function buildAction(sessionId: string, action: 'confirm' | 'skip', toolNa
   const baseUrl = settings.apiBaseUrl || DEFAULT_BASE_URL
   const url = `${baseUrl}/sessions/${sessionId}/build/${action}`
 
-  const response = await fetch(url, {
+  const response = await authedFetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: settings.apiKey ? `Bearer ${settings.apiKey}` : ''
+      ...getAuthHeaders()
     },
     body: toolName ? JSON.stringify({ tool_name: toolName }) : undefined
   })
@@ -812,11 +814,11 @@ export async function cancelSession(sessionId: string): Promise<CancelResult> {
   const baseUrl = settings.apiBaseUrl || DEFAULT_BASE_URL
   const url = `${baseUrl}/sessions/${sessionId}/cancel`
 
-  const response = await fetch(url, {
+  const response = await authedFetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: settings.apiKey ? `Bearer ${settings.apiKey}` : ''
+      ...getAuthHeaders()
     }
   })
 
@@ -839,11 +841,11 @@ export async function submitToolResult(
   const baseUrl = settings.apiBaseUrl || DEFAULT_BASE_URL
   const url = `${baseUrl}/sessions/${sessionId}/tool-result/${requestId}`
 
-  const response = await fetch(url, {
+  const response = await authedFetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: settings.apiKey ? `Bearer ${settings.apiKey}` : ''
+      ...getAuthHeaders()
     },
     body: JSON.stringify(result)
   })
@@ -866,11 +868,11 @@ export async function submitReconcileReply(
   const baseUrl = settings.apiBaseUrl || DEFAULT_BASE_URL
   const url = `${baseUrl}/sessions/${sessionId}/tool-result/${requestId}`
 
-  const response = await fetch(url, {
+  const response = await authedFetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: settings.apiKey ? `Bearer ${settings.apiKey}` : ''
+      ...getAuthHeaders()
     },
     body: JSON.stringify({
       reconcile: true,
@@ -896,9 +898,9 @@ export async function fetchQueue(sessionId: string): Promise<{
   const baseUrl = settings.apiBaseUrl || DEFAULT_BASE_URL
   const url = `${baseUrl}/sessions/${sessionId}/queue`
 
-  const response = await fetch(url, {
+  const response = await authedFetch(url, {
     headers: {
-      Authorization: settings.apiKey ? `Bearer ${settings.apiKey}` : ''
+      ...getAuthHeaders()
     }
   })
 
@@ -911,10 +913,10 @@ export async function removeFromQueue(sessionId: string, msgId: string): Promise
   const baseUrl = settings.apiBaseUrl || DEFAULT_BASE_URL
   const url = `${baseUrl}/sessions/${sessionId}/queue/${msgId}`
 
-  const response = await fetch(url, {
+  const response = await authedFetch(url, {
     method: 'DELETE',
     headers: {
-      Authorization: settings.apiKey ? `Bearer ${settings.apiKey}` : ''
+      ...getAuthHeaders()
     }
   })
 
@@ -923,11 +925,12 @@ export async function removeFromQueue(sessionId: string, msgId: string): Promise
 
 // ===== MCP 管理 API (section 2.9) =====
 
+/** 业务请求唯一出头的鉴权 header；access token 由 authStore 持有（doc 18-10.3）。 */
 function getAuthHeaders(): Record<string, string> {
-  const settings = useSettingsStore.getState().settings
+  const token = useAuthStore.getState().accessToken
   return {
     'Content-Type': 'application/json',
-    Authorization: settings.apiKey ? `Bearer ${settings.apiKey}` : ''
+    ...(token ? { Authorization: `Bearer ${token}` } : {})
   }
 }
 
@@ -939,21 +942,21 @@ function getMcpUrl(path: string): string {
 
 // GET /mcp/hub
 export async function fetchMcpHub(): Promise<{ servers: McpHubServer[] }> {
-  const response = await fetch(getMcpUrl('/mcp/hub'), { headers: getAuthHeaders() })
+  const response = await authedFetch(getMcpUrl('/mcp/hub'), { headers: getAuthHeaders() })
   if (!response.ok) throw new Error(`MCP Hub fetch error: ${response.status}`)
   return response.json()
 }
 
 // GET /mcp/installed
 export async function fetchMcpInstalled(): Promise<{ installed: McpInstalledServer[] }> {
-  const response = await fetch(getMcpUrl('/mcp/installed'), { headers: getAuthHeaders() })
+  const response = await authedFetch(getMcpUrl('/mcp/installed'), { headers: getAuthHeaders() })
   if (!response.ok) throw new Error(`MCP Installed fetch error: ${response.status}`)
   return response.json()
 }
 
 // POST /mcp/install — 服务端登记 + 返回完整配置，客户端按 transport 建立连接
 export async function installMcpApi(serverId: string): Promise<McpInstallResponse> {
-  const response = await fetch(getMcpUrl('/mcp/install'), {
+  const response = await authedFetch(getMcpUrl('/mcp/install'), {
     method: 'POST',
     headers: getAuthHeaders(),
     body: JSON.stringify({ server_id: serverId })
@@ -969,7 +972,7 @@ export async function installMcpApi(serverId: string): Promise<McpInstallRespons
 
 // DELETE /mcp/uninstall/{server_id}
 export async function uninstallMcpApi(serverId: string): Promise<{ uninstalled: boolean; server_id: string }> {
-  const response = await fetch(getMcpUrl(`/mcp/uninstall/${serverId}`), {
+  const response = await authedFetch(getMcpUrl(`/mcp/uninstall/${serverId}`), {
     method: 'DELETE',
     headers: getAuthHeaders()
   })
@@ -982,14 +985,14 @@ export async function uninstallMcpApi(serverId: string): Promise<{ uninstalled: 
 
 // GET /mcp/custom
 export async function fetchMcpCustom(): Promise<{ custom: CustomMcpServer[] }> {
-  const response = await fetch(getMcpUrl('/mcp/custom'), { headers: getAuthHeaders() })
+  const response = await authedFetch(getMcpUrl('/mcp/custom'), { headers: getAuthHeaders() })
   if (!response.ok) throw new Error(`MCP Custom fetch error: ${response.status}`)
   return response.json()
 }
 
 // POST /mcp/custom
 export async function createCustomMcpApi(req: CreateCustomMcpRequest): Promise<CustomMcpServer> {
-  const response = await fetch(getMcpUrl('/mcp/custom'), {
+  const response = await authedFetch(getMcpUrl('/mcp/custom'), {
     method: 'POST',
     headers: getAuthHeaders(),
     body: JSON.stringify(req)
@@ -1003,7 +1006,7 @@ export async function createCustomMcpApi(req: CreateCustomMcpRequest): Promise<C
 
 // DELETE /mcp/custom/{server_id}
 export async function deleteCustomMcpApi(serverId: string): Promise<{ deleted: boolean; server_id: string }> {
-  const response = await fetch(getMcpUrl(`/mcp/custom/${serverId}`), {
+  const response = await authedFetch(getMcpUrl(`/mcp/custom/${serverId}`), {
     method: 'DELETE',
     headers: getAuthHeaders()
   })
@@ -1014,16 +1017,15 @@ export async function deleteCustomMcpApi(serverId: string): Promise<{ deleted: b
   return response.json()
 }
 
-// POST /mcp/tools — 客户端上报工具清单
+// POST /mcp/tools — 客户端上报工具清单（身份从 token 取，不再传 user_id）
 export async function reportMcpTools(
-  userId: string,
   serverId: string,
   tools: McpToolDef[]
 ): Promise<{ received: boolean; tool_count: number }> {
-  const response = await fetch(getMcpUrl('/mcp/tools'), {
+  const response = await authedFetch(getMcpUrl('/mcp/tools'), {
     method: 'POST',
     headers: getAuthHeaders(),
-    body: JSON.stringify({ user_id: userId, server_id: serverId, tools })
+    body: JSON.stringify({ server_id: serverId, tools })
   })
   if (!response.ok) {
     const err = await response.json().catch(() => ({ detail: 'Report tools failed' }))
@@ -1042,14 +1044,14 @@ function getSkillUrl(path: string): string {
 
 // GET /skills/hub
 export async function fetchSkillHub(): Promise<{ skills: HubSkill[] }> {
-  const response = await fetch(getSkillUrl('/skills/hub'), { headers: getAuthHeaders() })
+  const response = await authedFetch(getSkillUrl('/skills/hub'), { headers: getAuthHeaders() })
   if (!response.ok) throw new Error(`Skill Hub fetch error: ${response.status}`)
   return response.json()
 }
 
 // GET /skills/installed
 export async function fetchInstalledSkills(): Promise<{ installed: InstalledSkill[] }> {
-  const response = await fetch(getSkillUrl('/skills/installed'), { headers: getAuthHeaders() })
+  const response = await authedFetch(getSkillUrl('/skills/installed'), { headers: getAuthHeaders() })
   if (!response.ok) throw new Error(`Skill Installed fetch error: ${response.status}`)
   return response.json()
 }
@@ -1059,16 +1061,15 @@ export async function installSkillApi(skillId: string): Promise<SkillInstallResu
   // Dedicated headers for this endpoint — the response may be JSON or binary zip,
   // so we explicitly accept both. Don't reuse getAuthHeaders() which sets
   // Content-Type: application/json as a blanket header.
-  const settings = useSettingsStore.getState().settings
   const headers: Record<string, string> = {
     'Accept': 'application/zip, application/json',
-    'Content-Type': 'application/json'
-  }
-  if (settings.apiKey) {
-    headers['Authorization'] = `Bearer ${settings.apiKey}`
+    'Content-Type': 'application/json',
+    ...(useAuthStore.getState().accessToken
+      ? { Authorization: `Bearer ${useAuthStore.getState().accessToken}` }
+      : {})
   }
 
-  const response = await fetch(getSkillUrl('/skills/install'), {
+  const response = await authedFetch(getSkillUrl('/skills/install'), {
     method: 'POST',
     headers,
     body: JSON.stringify({ skill_id: skillId })
@@ -1104,7 +1105,7 @@ export async function installSkillApi(skillId: string): Promise<SkillInstallResu
 
 // DELETE /skills/uninstall/{skill_id}
 export async function uninstallSkillApi(skillId: string): Promise<{ uninstalled: boolean; skill_id: string }> {
-  const response = await fetch(getSkillUrl(`/skills/uninstall/${skillId}`), {
+  const response = await authedFetch(getSkillUrl(`/skills/uninstall/${skillId}`), {
     method: 'DELETE',
     headers: getAuthHeaders()
   })
@@ -1117,7 +1118,7 @@ export async function uninstallSkillApi(skillId: string): Promise<{ uninstalled:
 
 // POST /skills/enable
 export async function enableSkillApi(skillId: string): Promise<{ enabled: boolean; skill_id: string }> {
-  const response = await fetch(getSkillUrl('/skills/enable'), {
+  const response = await authedFetch(getSkillUrl('/skills/enable'), {
     method: 'POST',
     headers: getAuthHeaders(),
     body: JSON.stringify({ skill_id: skillId })
@@ -1131,7 +1132,7 @@ export async function enableSkillApi(skillId: string): Promise<{ enabled: boolea
 
 // POST /skills/disable
 export async function disableSkillApi(skillId: string): Promise<{ disabled: boolean; skill_id: string }> {
-  const response = await fetch(getSkillUrl('/skills/disable'), {
+  const response = await authedFetch(getSkillUrl('/skills/disable'), {
     method: 'POST',
     headers: getAuthHeaders(),
     body: JSON.stringify({ skill_id: skillId })
@@ -1145,14 +1146,14 @@ export async function disableSkillApi(skillId: string): Promise<{ disabled: bool
 
 // GET /skills/custom
 export async function fetchCustomSkillsApi(): Promise<{ custom: CustomSkillDef[] }> {
-  const response = await fetch(getSkillUrl('/skills/custom'), { headers: getAuthHeaders() })
+  const response = await authedFetch(getSkillUrl('/skills/custom'), { headers: getAuthHeaders() })
   if (!response.ok) throw new Error(`Custom Skills fetch error: ${response.status}`)
   return response.json()
 }
 
 // POST /skills/custom
 export async function createCustomSkillApi(req: CreateCustomSkillRequest): Promise<CustomSkillDef> {
-  const response = await fetch(getSkillUrl('/skills/custom'), {
+  const response = await authedFetch(getSkillUrl('/skills/custom'), {
     method: 'POST',
     headers: getAuthHeaders(),
     body: JSON.stringify(req)
@@ -1166,7 +1167,7 @@ export async function createCustomSkillApi(req: CreateCustomSkillRequest): Promi
 
 // PUT /skills/custom/{skill_id}
 export async function updateCustomSkillApi(skillId: string, req: Partial<CreateCustomSkillRequest>): Promise<{ updated: boolean; skill_id: string }> {
-  const response = await fetch(getSkillUrl(`/skills/custom/${skillId}`), {
+  const response = await authedFetch(getSkillUrl(`/skills/custom/${skillId}`), {
     method: 'PUT',
     headers: getAuthHeaders(),
     body: JSON.stringify(req)
@@ -1180,7 +1181,7 @@ export async function updateCustomSkillApi(skillId: string, req: Partial<CreateC
 
 // DELETE /skills/custom/{skill_id}
 export async function deleteCustomSkillApi(skillId: string): Promise<{ deleted: boolean; skill_id: string }> {
-  const response = await fetch(getSkillUrl(`/skills/custom/${skillId}`), {
+  const response = await authedFetch(getSkillUrl(`/skills/custom/${skillId}`), {
     method: 'DELETE',
     headers: getAuthHeaders()
   })
@@ -1209,14 +1210,14 @@ export async function fetchL1Memories(
   if (params?.limit != null) query.set('limit', String(params.limit))
   if (params?.offset != null) query.set('offset', String(params.offset))
   const suffix = query.toString() ? `?${query}` : ''
-  const response = await fetch(getApiUrl(`/l1/memories${suffix}`), { headers: getAuthHeaders() })
+  const response = await authedFetch(getApiUrl(`/l1/memories${suffix}`), { headers: getAuthHeaders() })
   if (!response.ok) throw new Error(`L1 memories fetch error: ${response.status}`)
   return response.json()
 }
 
 // DELETE /l1/memories/{id} — 硬删（用户手删的语义是"这条不该存在"）
 export async function deleteL1Memory(id: string): Promise<void> {
-  const response = await fetch(getApiUrl(`/l1/memories/${encodeURIComponent(id)}`), {
+  const response = await authedFetch(getApiUrl(`/l1/memories/${encodeURIComponent(id)}`), {
     method: 'DELETE',
     headers: getAuthHeaders()
   })
@@ -1237,14 +1238,14 @@ export async function fetchL2Scenes(
   if (params?.limit != null) query.set('limit', String(params.limit))
   if (params?.offset != null) query.set('offset', String(params.offset))
   const suffix = query.toString() ? `?${query}` : ''
-  const response = await fetch(getApiUrl(`/l2/scenes${suffix}`), { headers: getAuthHeaders() })
+  const response = await authedFetch(getApiUrl(`/l2/scenes${suffix}`), { headers: getAuthHeaders() })
   if (!response.ok) throw new Error(`L2 scenes fetch error: ${response.status}`)
   return response.json()
 }
 
 // DELETE /l2/scenes/{id} — 硬删（场景是自动产物，删除只作逃生口）
 export async function deleteL2Scene(id: string): Promise<void> {
-  const response = await fetch(getApiUrl(`/l2/scenes/${encodeURIComponent(id)}`), {
+  const response = await authedFetch(getApiUrl(`/l2/scenes/${encodeURIComponent(id)}`), {
     method: 'DELETE',
     headers: getAuthHeaders()
   })
@@ -1265,7 +1266,7 @@ export async function fetchL3Personas(
   if (params?.limit != null) query.set('limit', String(params.limit))
   if (params?.offset != null) query.set('offset', String(params.offset))
   const suffix = query.toString() ? `?${query}` : ''
-  const response = await fetch(getApiUrl(`/l3/personas${suffix}`), { headers: getAuthHeaders() })
+  const response = await authedFetch(getApiUrl(`/l3/personas${suffix}`), { headers: getAuthHeaders() })
   if (!response.ok) throw new Error(`L3 personas fetch error: ${response.status}`)
   return response.json()
 }
@@ -1274,7 +1275,7 @@ export async function fetchL3Personas(
 // 所以作用域靠 query 参数定位（空串 = 顶层作用域）。
 export async function deleteL3Persona(agentId: string): Promise<void> {
   const query = new URLSearchParams({ agent_id: agentId })
-  const response = await fetch(getApiUrl(`/l3/personas?${query}`), {
+  const response = await authedFetch(getApiUrl(`/l3/personas?${query}`), {
     method: 'DELETE',
     headers: getAuthHeaders()
   })
@@ -1288,7 +1289,7 @@ export async function deleteL3Persona(agentId: string): Promise<void> {
 
 // GET /rules
 export async function fetchRules(): Promise<{ rules: RuleItem[] }> {
-  const response = await fetch(getApiUrl('/rules'), { headers: getAuthHeaders() })
+  const response = await authedFetch(getApiUrl('/rules'), { headers: getAuthHeaders() })
   if (!response.ok) throw new Error(`Rules fetch error: ${response.status}`)
   return response.json()
 }
@@ -1300,7 +1301,7 @@ export async function saveRule(req: {
   content: string
   priority: number
 }): Promise<{ id: string; name: string; created_at?: string; updated_at?: string }> {
-  const response = await fetch(getApiUrl('/rules'), {
+  const response = await authedFetch(getApiUrl('/rules'), {
     method: 'POST',
     headers: getAuthHeaders(),
     body: JSON.stringify(req)
@@ -1314,7 +1315,7 @@ export async function saveRule(req: {
 
 // DELETE /rules/{id}
 export async function deleteRuleApi(id: string): Promise<{ status: string; id: string }> {
-  const response = await fetch(getApiUrl(`/rules/${id}`), {
+  const response = await authedFetch(getApiUrl(`/rules/${id}`), {
     method: 'DELETE',
     headers: getAuthHeaders()
   })
@@ -1335,18 +1336,16 @@ function getExpertUrl(path: string): string {
 
 // GET /experts
 export async function fetchExperts(): Promise<{ experts: Expert[] }> {
-  const response = await fetch(getExpertUrl('/experts'), { headers: getAuthHeaders() })
+  const response = await authedFetch(getExpertUrl('/experts'), { headers: getAuthHeaders() })
   if (!response.ok) throw new Error(`Experts fetch error: ${response.status}`)
   return response.json()
 }
 
 // GET /experts/{id}/download
 export async function downloadExpert(id: string): Promise<string> {
-  const settings = useSettingsStore.getState().settings
   const headers: Record<string, string> = { 'Accept': 'application/zip, application/json' }
-  if (settings.apiKey) headers['Authorization'] = `Bearer ${settings.apiKey}`
 
-  const response = await fetch(getExpertUrl(`/experts/${id}/download`), { headers })
+  const response = await authedFetch(getExpertUrl(`/experts/${id}/download`), { headers })
 
   if (!response.ok) {
     if (response.status === 404) throw new Error('专家不存在')
@@ -1372,11 +1371,9 @@ export async function downloadExpert(id: string): Promise<string> {
 
 // GET /teams/{id}/download
 export async function downloadTeam(id: string): Promise<string> {
-  const settings = useSettingsStore.getState().settings
   const headers: Record<string, string> = { 'Accept': 'application/zip, application/json' }
-  if (settings.apiKey) headers['Authorization'] = `Bearer ${settings.apiKey}`
 
-  const response = await fetch(getExpertUrl(`/teams/${id}/download`), { headers })
+  const response = await authedFetch(getExpertUrl(`/teams/${id}/download`), { headers })
 
   if (!response.ok) {
     if (response.status === 404) throw new Error('团队不存在')
@@ -1401,7 +1398,7 @@ export async function downloadTeam(id: string): Promise<string> {
 
 // GET /teams
 export async function fetchTeams(): Promise<{ teams: Team[] }> {
-  const response = await fetch(getExpertUrl('/teams'), { headers: getAuthHeaders() })
+  const response = await authedFetch(getExpertUrl('/teams'), { headers: getAuthHeaders() })
   if (!response.ok) throw new Error(`Teams fetch error: ${response.status}`)
   return response.json()
 }

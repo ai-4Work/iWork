@@ -39,7 +39,7 @@ from server.models.session import (
     Session, SessionCreate, SessionUpdate, SessionStatus,
     SessionListItem, SessionDetail, AgentConfig,
 )
-from server.api.deps import get_db, get_engine_manager, get_default_user_id
+from server.api.deps import get_db, get_engine_manager, get_current_user
 from server.engine.query_loop import QueueFullError
 from server.observability.audit import audit_log
 
@@ -101,7 +101,7 @@ async def list_sessions(
     limit: int = Query(50, ge=1, le=100),
     offset: int = Query(0, ge=0),
     engine_mgr=Depends(get_engine_manager),
-    user_id: UUID = Depends(get_default_user_id),
+    user_id: UUID = Depends(get_current_user),
 ):
     sessions, total = await engine_mgr.session_repo.list_by_user(
         user_id=str(user_id),
@@ -136,7 +136,7 @@ async def list_sessions(
 async def create_session(
     body: SessionCreate,
     engine_mgr=Depends(get_engine_manager),
-    user_id: UUID = Depends(get_default_user_id),
+    user_id: UUID = Depends(get_current_user),
 ):
     # 幂等校验：同 ID 已存在则返回 409
     existing = await engine_mgr.session_repo.get(body.id)
@@ -375,7 +375,7 @@ async def send_message(
     session_id: UUID,
     body: MessageCreate,
     engine_mgr=Depends(get_engine_manager),
-    user_id: UUID = Depends(get_default_user_id),
+    user_id: UUID = Depends(get_current_user),
     db=Depends(get_db),
 ):
     logger.info("send_message  session=%s  content=%.200s  mode=%s  model=%s  scene=%s  workspace=%s  agent=%s/%s",
@@ -878,7 +878,7 @@ router_rules = APIRouter(prefix="/rules")
 @router_rules.get("")
 async def list_rules(
     db=Depends(get_db),
-    user_id: UUID = Depends(get_default_user_id),
+    user_id: UUID = Depends(get_current_user),
 ):
     from server.db.models import OrmRule
     rows = (await db.execute(
@@ -904,7 +904,7 @@ async def list_rules(
 async def get_rule(
     rule_id: UUID,
     db=Depends(get_db),
-    user_id: UUID = Depends(get_default_user_id),
+    user_id: UUID = Depends(get_current_user),
 ):
     from server.db.models import OrmRule
     row = (await db.execute(
@@ -926,7 +926,7 @@ async def get_rule(
 async def upsert_rule(
     body: dict,
     db=Depends(get_db),
-    user_id: UUID = Depends(get_default_user_id),
+    user_id: UUID = Depends(get_current_user),
 ):
     from server.db.models import OrmRule
     from datetime import datetime, timezone
@@ -974,7 +974,7 @@ async def upsert_rule(
 async def delete_rule(
     rule_id: UUID,
     db=Depends(get_db),
-    user_id: UUID = Depends(get_default_user_id),
+    user_id: UUID = Depends(get_current_user),
 ):
     from server.db.models import OrmRule
     result = await db.execute(
@@ -1018,7 +1018,7 @@ async def list_l1_memories(
     type: str | None = Query(None, description="persona | episodic | instruction"),
     agent_id: str | None = Query(None),
     db=Depends(get_db),
-    user_id: UUID = Depends(get_default_user_id),
+    user_id: UUID = Depends(get_current_user),
 ):
     """L1 原子记忆列表。只出 retrievable=true（被取代的旧版本不进列表）。"""
     from server.db.models import OrmL1Memory
@@ -1042,7 +1042,7 @@ async def list_l1_memories(
 async def delete_l1_memory(
     memory_id: str,
     db=Depends(get_db),
-    user_id: UUID = Depends(get_default_user_id),
+    user_id: UUID = Depends(get_current_user),
 ):
     """硬删。用户手删的语义是"这条记忆不该存在"，软删只会让它永远躺在库里。"""
     from server.db.models import OrmL1Memory
@@ -1084,7 +1084,7 @@ async def list_l2_scenes(
     offset: int = Query(0, ge=0),
     agent_id: str | None = Query(None),
     db=Depends(get_db),
-    user_id: UUID = Depends(get_default_user_id),
+    user_id: UUID = Depends(get_current_user),
 ):
     """L2 场景列表。只出 retrievable=true（被 merge 取代的旧场景不进列表），按热度降序。"""
     from server.db.models import OrmL2Scene
@@ -1107,7 +1107,7 @@ async def list_l2_scenes(
 async def delete_l2_scene(
     scene_id: str,
     db=Depends(get_db),
-    user_id: UUID = Depends(get_default_user_id),
+    user_id: UUID = Depends(get_current_user),
 ):
     """硬删。场景是自动产物，手改会和 merge / version 语义打架；删除只留作逃生口。"""
     from server.db.models import OrmL2Scene
@@ -1145,7 +1145,7 @@ async def list_l3_personas(
     offset: int = Query(0, ge=0),
     agent_id: str | None = Query(None),
     db=Depends(get_db),
-    user_id: UUID = Depends(get_default_user_id),
+    user_id: UUID = Depends(get_current_user),
 ):
     """画像列表。一个作用域一行，按最后生成时间降序。"""
     from server.db.models import OrmL3Persona
@@ -1167,7 +1167,7 @@ async def list_l3_personas(
 async def delete_l3_persona(
     agent_id: str = Query("", description="作用域 agent 标识（顶层为空串）"),
     db=Depends(get_db),
-    user_id: UUID = Depends(get_default_user_id),
+    user_id: UUID = Depends(get_current_user),
 ):
     """硬删。主键是 (user_id, agent_id)、画像行没有自己的 id，所以用 query 参数定位作用域。
     删掉之后下次 L2 整合会按 P2 冷启动重新生成，这条路径只留作逃生口。"""

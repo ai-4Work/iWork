@@ -2,6 +2,7 @@ import { app, BrowserWindow, shell } from 'electron'
 import { join } from 'path'
 import { registerFileOps } from './fileOps'
 import { registerSettings } from './settings'
+import { registerAuth } from './auth'
 import { registerStorage } from './storage'
 import { registerMcpIpc } from './mcpIpc'
 import { registerProxyIpc } from './proxy'
@@ -53,6 +54,8 @@ app.whenReady().then(() => {
   app.setAppUserModelId('com.agent.electron-app')
 
   const { get: getSettings } = registerSettings()
+  // 密钥链不可用时生产环境会在这一步拒绝启动（doc 18-10.3）
+  registerAuth()
   registerStorage()
   registerFileOps(() => getSettings().workspacePath)
   registerMcpIpc()
