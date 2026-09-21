@@ -168,4 +168,6 @@ Skill 的脚本在**客户端本地**执行，所以下面这些软件与凭证�
 - 环境变量走**系统环境**（Windows 用 `setx`，macOS/Linux 写进 shell profile），不要写进 `agent-client/.env` —— 那份 `.env` 是构建期注入渲染进程的 `VITE_` 变量，Skill 脚本读的是子进程环境变量，读不到。Windows 上 `setx` 完不用重启客户端，客户端每次执行命令会重读注册表。
 
 
+## 📄 License
 
+This project is licensed under the [MIT License](LICENSE).   [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
