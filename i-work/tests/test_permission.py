@@ -100,7 +100,7 @@ def test_classify_tool():
     assert classify_tool("bash") == "command"
     assert classify_tool("exec_command") == "command"
     assert classify_tool("web_fetch") == "network"
-    assert classify_tool("load_memory") == "other"
+    assert classify_tool("memory_search") == "other"
 
 
 def test_file_write_inside_workspace_skip():

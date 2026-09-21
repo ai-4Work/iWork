@@ -54,12 +54,11 @@ def test_tool_idempotency_classifier():
     assert tool_idempotency("glob") == "read-only"
     assert tool_idempotency("grep") == "read-only"
     assert tool_idempotency("recall") == "read-only"
-    assert tool_idempotency("load_memory") == "read-only"
+    assert tool_idempotency("memory_search") == "read-only"
     assert tool_idempotency("write_file") == "idempotent"
     # 默认保守
     assert tool_idempotency("bash") == "non-idempotent"
     assert tool_idempotency("edit_file") == "non-idempotent"
-    assert tool_idempotency("write_memory") == "non-idempotent"
     assert tool_idempotency("skill") == "non-idempotent"
     # MCP 命名空间工具名未知 → 默认 non-idempotent
     assert tool_idempotency("some_server_do_write") == "non-idempotent"

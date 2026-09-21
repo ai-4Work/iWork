@@ -6,16 +6,18 @@ C-3 幂等档：工具"结果不确定/失败时能否自动重放"的权威判�
 - idempotent      整内容覆盖写等，重复执行结果一致，可安全重放；
 - non-idempotent  副作用/写类，判不出时一律不自动重放（默认）。
 
-客户端工具（client.tool_request 执行）与 SERVER_MEMORY_TOOLS（服务端直执行）分类对齐。
+客户端工具（client.tool_request 执行）与 SERVER_BUILTIN_TOOLS（服务端直执行）分类对齐。
 """
 from __future__ import annotations
 
-# 工具名白名单（客户端执行 / SERVER_MEMORY_TOOLS 服务端直执行的子集）
+# 工具名白名单（客户端执行 / SERVER_BUILTIN_TOOLS 服务端直执行的子集）
 READ_ONLY_TOOLS = frozenset({
     # 文件读取（客户端工具）
     "read_file", "read", "glob", "grep",
-    # 记忆/检索（服务端工具）
-    "recall", "load_memory",
+    # 记忆检索/召回（服务端工具）
+    "recall", "memory_search",
+    # 场景按名读取（服务端工具，只读不落副作用账）
+    "scene_read",
 })
 IDEMPOTENT_TOOLS = frozenset({
     # 整文件覆盖写可安全重复（客户端工具）

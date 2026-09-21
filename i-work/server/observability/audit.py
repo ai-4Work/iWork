@@ -78,8 +78,6 @@ class AuditSubscriber:
                 return "tool.file_write"
             if tool_name == "bash":
                 return "tool.shell_exec"
-            if tool_name in ("load_memory", "write_memory", "delete_memory"):
-                return f"tool.{tool_name}"
             return f"tool.{tool_name}"
         if event.type == AgentEventType.TOOL_PERMISSION_DENIED:
             return "tool.permission_denied"

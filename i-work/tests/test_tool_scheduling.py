@@ -89,7 +89,7 @@ def test_non_read_only_commands_fall_back_to_write():
 # ── 工具名判定 ──────────────────────────────────────────────
 
 def test_read_tools_are_read():
-    for name in ("read_file", "glob", "grep", "skill", "recall", "load_memory"):
+    for name in ("read_file", "glob", "grep", "skill", "recall", "memory_search"):
         assert is_read_only(name) is True, name
 
 

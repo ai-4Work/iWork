@@ -1,4 +1,4 @@
-import type { ServerEvent, AppMode, SceneMode, McpHubServer, McpInstalledServer, CustomMcpServer, CreateCustomMcpRequest, HubSkill, InstalledSkill, CustomSkillDef, CreateCustomSkillRequest, McpInstallResponse, McpToolDef, SkillInstallResult, MemoryItem, RuleItem, Expert, Team, NetworkApproval, PolicyPacket, McpCallResult, SideEffectItem } from '../types'
+import type { ServerEvent, AppMode, SceneMode, McpHubServer, McpInstalledServer, CustomMcpServer, CreateCustomMcpRequest, HubSkill, InstalledSkill, CustomSkillDef, CreateCustomSkillRequest, McpInstallResponse, McpToolDef, SkillInstallResult, L1MemoryItem, L2SceneItem, L3PersonaItem, RuleItem, Expert, Team, NetworkApproval, PolicyPacket, McpCallResult, SideEffectItem } from '../types'
 import { useSettingsStore } from '../stores/settingsStore'
 import { parseNDJSONStream } from './ndjson'
 import { ipcClient } from './ipcClient'
@@ -1191,60 +1191,104 @@ export async function deleteCustomSkillApi(skillId: string): Promise<{ deleted: 
   return response.json()
 }
 
-// ===== Memory 管理 API (section 5.10) =====
+// ===== L1 原子记忆 API（docs/chapters/5-记忆模块）=====
 
-function getMemoryUrl(path: string): string {
+function getApiUrl(path: string): string {
   const settings = useSettingsStore.getState().settings
   const baseUrl = settings.apiBaseUrl || DEFAULT_BASE_URL
   return `${baseUrl}${path}`
 }
 
-// GET /memories
-export async function fetchMemories(type?: string): Promise<{ memories: MemoryItem[] }> {
-  const params = type ? `?type=${encodeURIComponent(type)}` : ''
-  const response = await fetch(getMemoryUrl(`/memories${params}`), { headers: getAuthHeaders() })
-  if (!response.ok) throw new Error(`Memories fetch error: ${response.status}`)
+// GET /l1/memories — 只出 retrievable=true（被取代的旧版本不进列表）
+export async function fetchL1Memories(
+  params?: { type?: string; agentId?: string; limit?: number; offset?: number }
+): Promise<{ total: number; memories: L1MemoryItem[] }> {
+  const query = new URLSearchParams()
+  if (params?.type) query.set('type', params.type)
+  if (params?.agentId) query.set('agent_id', params.agentId)
+  if (params?.limit != null) query.set('limit', String(params.limit))
+  if (params?.offset != null) query.set('offset', String(params.offset))
+  const suffix = query.toString() ? `?${query}` : ''
+  const response = await fetch(getApiUrl(`/l1/memories${suffix}`), { headers: getAuthHeaders() })
+  if (!response.ok) throw new Error(`L1 memories fetch error: ${response.status}`)
   return response.json()
 }
 
-// POST /memories — 新建/编辑（按 name upsert）
-export async function saveMemory(req: {
-  name: string
-  description: string
-  type: string
-  content: string
-  protected: boolean
-}): Promise<{ id: string; name: string; created_at?: string; updated_at?: string }> {
-  const response = await fetch(getMemoryUrl('/memories'), {
-    method: 'POST',
-    headers: getAuthHeaders(),
-    body: JSON.stringify(req)
-  })
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({ message: 'Save memory failed' }))
-    throw new Error(err.message || err.detail || `Memory save error: ${response.status}`)
-  }
-  return response.json()
-}
-
-// DELETE /memories/{id}
-export async function deleteMemoryApi(id: string): Promise<{ status: string; id: string }> {
-  const response = await fetch(getMemoryUrl(`/memories/${id}`), {
+// DELETE /l1/memories/{id} — 硬删（用户手删的语义是"这条不该存在"）
+export async function deleteL1Memory(id: string): Promise<void> {
+  const response = await fetch(getApiUrl(`/l1/memories/${encodeURIComponent(id)}`), {
     method: 'DELETE',
     headers: getAuthHeaders()
   })
   if (!response.ok) {
     const err = await response.json().catch(() => ({ message: 'Delete memory failed' }))
-    throw new Error(err.message || err.detail || `Memory delete error: ${response.status}`)
+    throw new Error(err.message || err.detail || `L1 memory delete error: ${response.status}`)
   }
+}
+
+// ===== L2 场景记忆 API（docs/chapters/5-记忆模块 第二部分）=====
+
+// GET /l2/scenes — 只出 retrievable=true（被 merge 取代的旧场景不进列表），按热度降序
+export async function fetchL2Scenes(
+  params?: { agentId?: string; limit?: number; offset?: number }
+): Promise<{ total: number; scenes: L2SceneItem[] }> {
+  const query = new URLSearchParams()
+  if (params?.agentId) query.set('agent_id', params.agentId)
+  if (params?.limit != null) query.set('limit', String(params.limit))
+  if (params?.offset != null) query.set('offset', String(params.offset))
+  const suffix = query.toString() ? `?${query}` : ''
+  const response = await fetch(getApiUrl(`/l2/scenes${suffix}`), { headers: getAuthHeaders() })
+  if (!response.ok) throw new Error(`L2 scenes fetch error: ${response.status}`)
   return response.json()
+}
+
+// DELETE /l2/scenes/{id} — 硬删（场景是自动产物，删除只作逃生口）
+export async function deleteL2Scene(id: string): Promise<void> {
+  const response = await fetch(getApiUrl(`/l2/scenes/${encodeURIComponent(id)}`), {
+    method: 'DELETE',
+    headers: getAuthHeaders()
+  })
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ message: 'Delete scene failed' }))
+    throw new Error(err.message || err.detail || `L2 scene delete error: ${response.status}`)
+  }
+}
+
+// ===== L3 画像记忆 API（docs/chapters/5-记忆模块 第三部分）=====
+
+// GET /l3/personas — 一个作用域一行，按最后生成时间降序
+export async function fetchL3Personas(
+  params?: { agentId?: string; limit?: number; offset?: number }
+): Promise<{ total: number; personas: L3PersonaItem[] }> {
+  const query = new URLSearchParams()
+  if (params?.agentId) query.set('agent_id', params.agentId)
+  if (params?.limit != null) query.set('limit', String(params.limit))
+  if (params?.offset != null) query.set('offset', String(params.offset))
+  const suffix = query.toString() ? `?${query}` : ''
+  const response = await fetch(getApiUrl(`/l3/personas${suffix}`), { headers: getAuthHeaders() })
+  if (!response.ok) throw new Error(`L3 personas fetch error: ${response.status}`)
+  return response.json()
+}
+
+// DELETE /l3/personas?agent_id= — 硬删。画像行没有 id，主键是 (user_id, agent_id)，
+// 所以作用域靠 query 参数定位（空串 = 顶层作用域）。
+export async function deleteL3Persona(agentId: string): Promise<void> {
+  const query = new URLSearchParams({ agent_id: agentId })
+  const response = await fetch(getApiUrl(`/l3/personas?${query}`), {
+    method: 'DELETE',
+    headers: getAuthHeaders()
+  })
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ message: 'Delete persona failed' }))
+    throw new Error(err.message || err.detail || `L3 persona delete error: ${response.status}`)
+  }
 }
 
 // ===== Rules 管理 API (section 5.9) =====
 
 // GET /rules
 export async function fetchRules(): Promise<{ rules: RuleItem[] }> {
-  const response = await fetch(getMemoryUrl('/rules'), { headers: getAuthHeaders() })
+  const response = await fetch(getApiUrl('/rules'), { headers: getAuthHeaders() })
   if (!response.ok) throw new Error(`Rules fetch error: ${response.status}`)
   return response.json()
 }
@@ -1256,7 +1300,7 @@ export async function saveRule(req: {
   content: string
   priority: number
 }): Promise<{ id: string; name: string; created_at?: string; updated_at?: string }> {
-  const response = await fetch(getMemoryUrl('/rules'), {
+  const response = await fetch(getApiUrl('/rules'), {
     method: 'POST',
     headers: getAuthHeaders(),
     body: JSON.stringify(req)
@@ -1270,7 +1314,7 @@ export async function saveRule(req: {
 
 // DELETE /rules/{id}
 export async function deleteRuleApi(id: string): Promise<{ status: string; id: string }> {
-  const response = await fetch(getMemoryUrl(`/rules/${id}`), {
+  const response = await fetch(getApiUrl(`/rules/${id}`), {
     method: 'DELETE',
     headers: getAuthHeaders()
   })

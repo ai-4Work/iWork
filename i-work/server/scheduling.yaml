@@ -29,9 +29,9 @@ read_tools:
   - grep
   # skill：加载 SKILL.md 指令集，只读无副作用
   - skill
-  # 服务端直执行的记忆读取（与 idempotency.READ_ONLY_TOOLS 对齐）
+  # 服务端直执行的记忆检索/召回（与 idempotency.READ_ONLY_TOOLS 对齐）
   - recall
-  - load_memory
+  - memory_search
 
 # ---- 命令类工具：参数里的 command 交给下面的命令白名单判定 ----
 command_tools:

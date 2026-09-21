@@ -1,6 +1,10 @@
 from __future__ import annotations
 from abc import ABC, abstractmethod
+from datetime import datetime
 from uuid import UUID
+from server.memory.types import L1Memory, L1Checkpoint
+from server.memory.l2.types import L2Scene, L2Checkpoint
+from server.memory.l3.types import L3Persona
 from server.models.session import Session
 from server.models.message import Message
 from server.models.tool_invocation import ToolInvocation
@@ -109,6 +113,166 @@ class MessageRepository(ABC):
     @abstractmethod
     async def list_processing(self) -> list[Message]:
         """查询所有正在处理的消息（引擎恢复用）"""
+        ...
+
+
+class L1MemoryRepository(ABC):
+    """L1 原子记忆仓储抽象（记忆模块）。
+
+    写入只有一条路径 apply_batch：抽取结果的一批 insert 与被 update/merge 取代的
+    一批 supersede 必须在同一事务里落地，否则会出现"新行已进、旧行未软删"的
+    双份可检索状态。删除（硬删）只留给用户在客户端手工删除。
+
+    作用域是 user_id + agent_id（设计文档的 teamId 缺省降级分支）。
+    """
+
+    @abstractmethod
+    async def apply_batch(
+        self, inserts: list[L1Memory], supersede_ids: list[str],
+    ) -> None:
+        """原子落地一批抽取结果：插入新行 + 把被取代的旧行 retrievable 置 false。"""
+        ...
+
+    @abstractmethod
+    async def get(self, memory_id: str) -> L1Memory | None: ...
+
+    @abstractmethod
+    async def list_by_scope(
+        self, user_id: str, agent_id: str, *, retrievable_only: bool = True,
+    ) -> list[L1Memory]:
+        """取某作用域下的全部记忆，供检索侧建索引。"""
+        ...
+
+    @abstractmethod
+    async def list_page(
+        self, user_id: str, *, agent_id: str | None = None,
+        memory_type: str | None = None, limit: int = 200, offset: int = 0,
+    ) -> tuple[list[L1Memory], int]:
+        """分页列出（客户端展示用）。只返回 retrievable=true，按 updated_at 降序。"""
+        ...
+
+    @abstractmethod
+    async def delete(self, memory_id: str) -> bool:
+        """硬删（用户手删：这条记忆本就不该存在）。不存在返回 False。"""
+        ...
+
+    # ── L2 整合侧的两个读口 ─────────────────────────────────────
+
+    @abstractmethod
+    async def list_scopes(self) -> list[tuple[str, str]]:
+        """有可检索记忆的 distinct (user_id, agent_id) 作用域，L2 sweep 巡检用。"""
+        ...
+
+    @abstractmethod
+    async def list_since(
+        self, user_id: str, agent_id: str, since: datetime | None,
+        limit: int = 20,
+    ) -> list[L1Memory]:
+        """取某作用域下 updated_at > since 的记忆，按 updated_at 升序（L2 的增量输入）。
+
+        since 为 None 表示冷启动（无游标），从最早一条起算。
+        """
+
+    @abstractmethod
+    async def count_by_scope(self, user_id: str, agent_id: str) -> int:
+        """某作用域下可检索记忆的条数（L3 的 P4 阈值据它算"自上次画像以来的增量"）。"""
+
+        ...
+
+
+class L2SceneRepository(ABC):
+    """L2 场景仓储抽象（记忆模块）。
+
+    写入只有一条路径 apply_batch：一批动作产出的 insert 与被 merge 取代的 supersede 必须在
+    同一事务里落地，否则会出现"新场景已进、旧场景未软删"的双份可导航状态（同 L1 的告诫）。
+
+    作用域是 user_id + agent_id（设计文档 teamId 缺省降级分支）。名字在作用域内唯一
+    （仅约束 retrievable 行），因为 LLM 用名字引用场景，工程侧要把名字解析成行。
+    """
+
+    @abstractmethod
+    async def apply_batch(
+        self, inserts: list[L2Scene], supersede_ids: list[str],
+    ) -> None:
+        """原子落地一批整合结果：插入新行 + 把被取代的旧行 retrievable 置 false。"""
+        ...
+
+    @abstractmethod
+    async def get(self, scene_id: str) -> L2Scene | None: ...
+
+    @abstractmethod
+    async def get_by_name(
+        self, user_id: str, agent_id: str, name: str,
+    ) -> L2Scene | None:
+        """按名字取（scene_read 工具与 LLM 动作的目标解析都用它）。只找可检索的行。"""
+        ...
+
+    @abstractmethod
+    async def list_by_scope(
+        self, user_id: str, agent_id: str, *, retrievable_only: bool = True,
+    ) -> list[L2Scene]:
+        """取某作用域下的全部场景，供导航渲染与候选选取。"""
+        ...
+
+    @abstractmethod
+    async def list_page(
+        self, user_id: str, *, agent_id: str | None = None,
+        limit: int = 200, offset: int = 0,
+    ) -> tuple[list[L2Scene], int]:
+        """分页列出（客户端展示用）。只返回 retrievable=true，按热度降序。"""
+        ...
+
+    @abstractmethod
+    async def delete(self, scene_id: str) -> bool:
+        """硬删（用户手删：这个场景本就不该存在）。不存在返回 False。"""
+        ...
+
+    # ── 整合游标 ────────────────────────────────────────────────
+
+    @abstractmethod
+    async def get_checkpoint(self, user_id: str, agent_id: str) -> L2Checkpoint | None: ...
+
+    @abstractmethod
+    async def list_checkpoints(self) -> list[L2Checkpoint]:
+        """全量游标，sweep 巡检用。"""
+        ...
+
+    @abstractmethod
+    async def upsert_checkpoint(self, checkpoint: L2Checkpoint) -> None: ...
+
+
+class L3PersonaRepository(ABC):
+    """L3 画像仓储抽象（记忆模块）。
+
+    写入只有一条路径 upsert：一行画像一个作用域，有旧行则覆盖正文、版本 +1，无旧行则插入。
+    没有游标表 —— 画像行本身既是产物也是游标（`updated_at` 供筛变化场景，
+    `memory_count_at_generation` 供算 P4 增量），因此这套接口没有 checkpoint 三件套。
+
+    作用域是 user_id + agent_id（同 L1 / L2 的 teamId 降级分支）。
+    """
+
+    @abstractmethod
+    async def get(self, user_id: str, agent_id: str) -> L3Persona | None:
+        """读某作用域的画像行。返回 None = 从未生成过（首次 / P2 冷启动据此判断）。"""
+        ...
+
+    @abstractmethod
+    async def upsert(self, persona: L3Persona) -> None:
+        """原子落地一行画像：有旧行则覆盖 content、version +1、刷新 memory_count 与
+        updated_at（**沿用旧 created_at**）；无旧行则插入（version = 1）。"""
+        ...
+
+    @abstractmethod
+    async def list_page(
+        self, user_id: str, *, agent_id: str | None = None,
+        limit: int = 200, offset: int = 0,
+    ) -> tuple[list[L3Persona], int]:
+        """分页列出（客户端展示用），按 updated_at 降序。"""
+        ...
+
+    @abstractmethod
+    async def delete(self, user_id: str, agent_id: str) -> bool:
+        """硬删（用户手删：这份画像本就不该存在）。不存在返回 False。"""
         ...
 
 

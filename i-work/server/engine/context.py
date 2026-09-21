@@ -94,6 +94,23 @@ PLAN_QUESTION_TOOL_DEF = {
 }
 
 
+def _prepend_to_last_user(messages: list[dict], block: str) -> list[dict]:
+    """把 block 拼到最后一条 user 消息的 content 前缀（返回新列表，不就地改历史）。
+
+    历史行是共享的 dict（Context.messages = list(history) 只是浅拷列表），
+    就地改会把注入内容写回 conversation_history 本身 —— 必须换 dict。
+    """
+    for i in range(len(messages) - 1, -1, -1):
+        if messages[i].get("role") == "user":
+            patched = dict(messages[i])
+            content = patched.get("content")
+            patched["content"] = f"{block}\n\n{content}" if content else block
+            out = list(messages)
+            out[i] = patched
+            return out
+    return messages
+
+
 class ContextManager:
     """管理会话的对话历史和 LLM 上下文构建。
     对话历史持久化到 PostgreSQL conversation_history 表。
@@ -131,13 +148,26 @@ class ContextManager:
         server_tools: list[dict] | None = None,
         available_skills_xml: str = "",
         rules_xml: str = "",
-        memories_xml: str = "",
         available_agents_xml: str = "",
         system_prompt_override: str | None = None,
         offload_store=None,
         shell_env: str = "",
+        recall_block: str = "",
+        memory_guide_xml: str = "",
+        persona_xml: str = "",
+        scene_nav_xml: str = "",
     ) -> Context:
-        """构建单次 LLM 调用的完整上下文。"""
+        """构建单次 LLM 调用的完整上下文。
+
+        recall_block 是 L1 召回的**动态部分**：拼到最后一条 user 消息前缀，而不是
+        写进 system 提示词 —— system 段每轮字节级不变才能命中提供商的提示词缓存。
+        memory_guide_xml 是**稳定部分**（记忆工具使用指南），追加到 system 末尾。
+        persona_xml 是 L3 画像：同属稳定半边，但比场景导航变得少（只有 L3 生成时才动），
+        因此排在它前面。
+        scene_nav_xml 是 L2 场景导航：走稳定半边（不进 user 前缀），但它是稳定区里
+        变化最频繁的（每轮 L2 整合都可能动），因此排在最末 —— 提示词缓存按前缀命中，
+        易变内容放最后才能让前面整段保持可缓存。
+        """
         history = await self._repo.get_history(session_id)
         system = SYSTEM_PROMPTS_SECURITY
         if system_prompt_override:
@@ -161,13 +191,21 @@ class ContextManager:
         if rules_xml:
             system += "\n\n" + rules_xml
 
-        # 注入 <available_memories>（索引列表）
-        if memories_xml:
-            system += "\n\n" + memories_xml
-
         # 注入 <available_agents>（团队子 agent 列表）
         if available_agents_xml:
             system += "\n\n" + available_agents_xml
+
+        # 注入记忆工具使用指南（稳定部分，放 system 末尾命中缓存）
+        if memory_guide_xml:
+            system += "\n\n" + memory_guide_xml
+
+        # 注入 L3 画像（稳定部分；比场景导航变得少 → 排在它前面）
+        if persona_xml:
+            system += "\n\n" + persona_xml
+
+        # 注入 L2 场景导航（稳定半边，但内容随整合变化 → 排在最后）
+        if scene_nav_xml:
+            system += "\n\n" + scene_nav_xml
 
         # 被动召回（10.5.3）：用最后一条 user 消息做 TF-IDF 召回，命中则注入
         if offload_store is not None:
@@ -201,7 +239,11 @@ class ContextManager:
             if server_tools:
                 tools.extend(server_tools)
 
-        return Context(messages=list(history), system_prompt=system, available_tools=tools)
+        messages = list(history)
+        if recall_block:
+            messages = _prepend_to_last_user(messages, recall_block)
+
+        return Context(messages=messages, system_prompt=system, available_tools=tools)
 
     async def append_text(self, session_id: UUID, role: str, text: str,
                            reasoning: str | None = None) -> None:

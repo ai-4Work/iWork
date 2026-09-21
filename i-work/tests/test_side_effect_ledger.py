@@ -29,11 +29,10 @@ def test_tool_side_effect_classifier():
     assert tool_side_effect("glob") is False
     assert tool_side_effect("grep") is False
     assert tool_side_effect("recall") is False
-    assert tool_side_effect("load_memory") is False
+    assert tool_side_effect("memory_search") is False
     # 写类（即使幂等可重放的整文件覆盖写）都构成副作用
     assert tool_side_effect("write_file") is True
     assert tool_side_effect("bash") is True
-    assert tool_side_effect("write_memory") is True
     assert tool_side_effect("edit_file") is True
     # MCP 未知 → 默认写类保守
     assert tool_side_effect("some_server_do_write") is True

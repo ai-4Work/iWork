@@ -988,125 +988,199 @@ async def delete_rule(
 
 
 # ═══════════════════════════════════════════════════════════════
-# Memory 管理 API — POST/DELETE /memories, GET /memories, GET /memories/{id}
+# L1 原子记忆（docs/chapters/5-记忆模块）
 # ═══════════════════════════════════════════════════════════════
 
-router_memories = APIRouter(prefix="/memories")
+router_l1 = APIRouter(prefix="/l1")
 
 
-@router_memories.get("")
-async def list_memories(
-    mem_type: str | None = Query(None, alias="type", description="过滤类型: user, feedback, project, reference"),
-    db=Depends(get_db),
-    user_id: UUID = Depends(get_default_user_id),
-):
-    from server.db.models import OrmMemory
-    stmt = OrmMemory.__table__.select().where(OrmMemory.user_id == user_id)
-    if mem_type:
-        stmt = stmt.where(OrmMemory.type == mem_type)
-    stmt = stmt.order_by(OrmMemory.updated_at.desc())
-    rows = (await db.execute(stmt)).mappings().all()
+def _l1_row(row) -> dict:
+    meta = row["metadata_json"] or {}
     return {
-        "memories": [
-            {
-                "id": str(r["id"]), "name": r["name"],
-                "description": r["description"], "type": r["type"],
-                "content": r["content"], "protected": r["protected"],
-                "created_at": r["created_at"].isoformat(),
-                "updated_at": r["updated_at"].isoformat(),
-            }
-            for r in rows
-        ]
-    }
-
-
-@router_memories.get("/{memory_id}")
-async def get_memory(
-    memory_id: UUID,
-    db=Depends(get_db),
-    user_id: UUID = Depends(get_default_user_id),
-):
-    from server.db.models import OrmMemory
-    row = (await db.execute(
-        OrmMemory.__table__.select()
-        .where(OrmMemory.id == memory_id, OrmMemory.user_id == user_id)
-    )).mappings().first()
-    if row is None:
-        raise HTTPException(404, "记忆不存在")
-    return {
-        "id": str(row["id"]), "name": row["name"],
-        "description": row["description"], "type": row["type"],
-        "content": row["content"], "protected": row["protected"],
+        "id": row["id"],
+        "content": row["content"],
+        "type": row["type"],
+        "priority": row["priority"],
+        "scene_name": row["scene_name"],
+        "agent_id": row["agent_id"],
+        "activity_start_time": meta.get("activity_start_time"),
+        "activity_end_time": meta.get("activity_end_time"),
+        "version": row["version"],
         "created_at": row["created_at"].isoformat(),
         "updated_at": row["updated_at"].isoformat(),
     }
 
 
-@router_memories.post("", status_code=201)
-async def upsert_memory(
-    body: dict,
+@router_l1.get("/memories")
+async def list_l1_memories(
+    limit: int = Query(200, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    type: str | None = Query(None, description="persona | episodic | instruction"),
+    agent_id: str | None = Query(None),
     db=Depends(get_db),
     user_id: UUID = Depends(get_default_user_id),
 ):
-    from server.db.models import OrmMemory
-    from datetime import datetime, timezone
-    import uuid as _uuid
+    """L1 原子记忆列表。只出 retrievable=true（被取代的旧版本不进列表）。"""
+    from server.db.models import OrmL1Memory
+    where = [OrmL1Memory.user_id == user_id, OrmL1Memory.retrievable.is_(True)]
+    if type:
+        where.append(OrmL1Memory.type == type)
+    if agent_id is not None:
+        where.append(OrmL1Memory.agent_id == agent_id)
 
-    name = body.get("name", "")
-    if not name:
-        raise HTTPException(400, "name 不能为空")
-
-    existing = (await db.execute(
-        OrmMemory.__table__.select()
-        .where(OrmMemory.user_id == user_id, OrmMemory.name == name)
-    )).mappings().first()
-
-    now = datetime.now(timezone.utc)
-    if existing:
-        await db.execute(
-            OrmMemory.__table__.update()
-            .where(OrmMemory.id == existing["id"])
-            .values(
-                description=body.get("description", existing["description"]),
-                type=body.get("type", existing["type"]),
-                content=body.get("content", existing["content"]),
-                protected=body.get("protected", existing["protected"]),
-                updated_at=now,
-            )
-        )
-        await db.commit()
-        return {"id": str(existing["id"]), "name": name, "updated_at": now.isoformat()}
-    else:
-        mid = _uuid.uuid4()
-        await db.execute(
-            OrmMemory.__table__.insert().values(
-                id=mid, user_id=user_id, name=name,
-                description=body.get("description", ""),
-                type=body.get("type", "user"),
-                content=body.get("content", ""),
-                protected=body.get("protected", False),
-                created_at=now, updated_at=now,
-            )
-        )
-        await db.commit()
-        return {"id": str(mid), "name": name, "created_at": now.isoformat()}
+    total = (await db.execute(
+        select(func.count()).select_from(OrmL1Memory.__table__).where(*where)
+    )).scalar_one()
+    rows = (await db.execute(
+        OrmL1Memory.__table__.select().where(*where)
+        .order_by(OrmL1Memory.updated_at.desc()).limit(limit).offset(offset)
+    )).mappings().all()
+    return {"total": total, "memories": [_l1_row(r) for r in rows]}
 
 
-@router_memories.delete("/{memory_id}")
-async def delete_memory(
-    memory_id: UUID,
+@router_l1.delete("/memories/{memory_id}", status_code=204)
+async def delete_l1_memory(
+    memory_id: str,
     db=Depends(get_db),
     user_id: UUID = Depends(get_default_user_id),
 ):
-    from server.db.models import OrmMemory
+    """硬删。用户手删的语义是"这条记忆不该存在"，软删只会让它永远躺在库里。"""
+    from server.db.models import OrmL1Memory
     result = await db.execute(
-        OrmMemory.__table__.delete()
-        .where(OrmMemory.id == memory_id, OrmMemory.user_id == user_id)
+        OrmL1Memory.__table__.delete().where(
+            OrmL1Memory.id == memory_id, OrmL1Memory.user_id == user_id,
+        )
     )
     await db.commit()
     if result.rowcount == 0:
         raise HTTPException(404, "记忆不存在")
-    return {"status": "deleted", "id": str(memory_id)}
+
+
+# ═══════════════════════════════════════════════════════════════
+# L2 场景记忆（docs/chapters/5-记忆模块 第二部分）
+# ═══════════════════════════════════════════════════════════════
+
+router_l2 = APIRouter(prefix="/l2")
+
+
+def _l2_row(row) -> dict:
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "summary": row["summary"],
+        "content": row["content"],
+        "heat": row["heat"],
+        "version": row["version"],
+        "agent_id": row["agent_id"],
+        "source_memory_ids": row["source_memory_ids"] or [],
+        "created_at": row["created_at"].isoformat(),
+        "updated_at": row["updated_at"].isoformat(),
+    }
+
+
+@router_l2.get("/scenes")
+async def list_l2_scenes(
+    limit: int = Query(200, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    agent_id: str | None = Query(None),
+    db=Depends(get_db),
+    user_id: UUID = Depends(get_default_user_id),
+):
+    """L2 场景列表。只出 retrievable=true（被 merge 取代的旧场景不进列表），按热度降序。"""
+    from server.db.models import OrmL2Scene
+    where = [OrmL2Scene.user_id == user_id, OrmL2Scene.retrievable.is_(True)]
+    if agent_id is not None:
+        where.append(OrmL2Scene.agent_id == agent_id)
+
+    total = (await db.execute(
+        select(func.count()).select_from(OrmL2Scene.__table__).where(*where)
+    )).scalar_one()
+    rows = (await db.execute(
+        OrmL2Scene.__table__.select().where(*where)
+        .order_by(OrmL2Scene.heat.desc(), OrmL2Scene.updated_at.desc())
+        .limit(limit).offset(offset)
+    )).mappings().all()
+    return {"total": total, "scenes": [_l2_row(r) for r in rows]}
+
+
+@router_l2.delete("/scenes/{scene_id}", status_code=204)
+async def delete_l2_scene(
+    scene_id: str,
+    db=Depends(get_db),
+    user_id: UUID = Depends(get_default_user_id),
+):
+    """硬删。场景是自动产物，手改会和 merge / version 语义打架；删除只留作逃生口。"""
+    from server.db.models import OrmL2Scene
+    result = await db.execute(
+        OrmL2Scene.__table__.delete().where(
+            OrmL2Scene.id == scene_id, OrmL2Scene.user_id == user_id,
+        )
+    )
+    await db.commit()
+    if result.rowcount == 0:
+        raise HTTPException(404, "场景不存在")
+
+
+# ═══════════════════════════════════════════════════════════════
+# L3 画像记忆（docs/chapters/5-记忆模块 第三部分）
+# ═══════════════════════════════════════════════════════════════
+
+router_l3 = APIRouter(prefix="/l3")
+
+
+def _l3_row(row) -> dict:
+    return {
+        "agent_id": row["agent_id"],
+        "content": row["content"],
+        "version": row["version"],
+        "memory_count_at_generation": row["memory_count_at_generation"],
+        "created_at": row["created_at"].isoformat(),
+        "updated_at": row["updated_at"].isoformat(),
+    }
+
+
+@router_l3.get("/personas")
+async def list_l3_personas(
+    limit: int = Query(200, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    agent_id: str | None = Query(None),
+    db=Depends(get_db),
+    user_id: UUID = Depends(get_default_user_id),
+):
+    """画像列表。一个作用域一行，按最后生成时间降序。"""
+    from server.db.models import OrmL3Persona
+    where = [OrmL3Persona.user_id == user_id]
+    if agent_id is not None:
+        where.append(OrmL3Persona.agent_id == agent_id)
+
+    total = (await db.execute(
+        select(func.count()).select_from(OrmL3Persona.__table__).where(*where)
+    )).scalar_one()
+    rows = (await db.execute(
+        OrmL3Persona.__table__.select().where(*where)
+        .order_by(OrmL3Persona.updated_at.desc()).limit(limit).offset(offset)
+    )).mappings().all()
+    return {"total": total, "personas": [_l3_row(r) for r in rows]}
+
+
+@router_l3.delete("/personas", status_code=204)
+async def delete_l3_persona(
+    agent_id: str = Query("", description="作用域 agent 标识（顶层为空串）"),
+    db=Depends(get_db),
+    user_id: UUID = Depends(get_default_user_id),
+):
+    """硬删。主键是 (user_id, agent_id)、画像行没有自己的 id，所以用 query 参数定位作用域。
+    删掉之后下次 L2 整合会按 P2 冷启动重新生成，这条路径只留作逃生口。"""
+    from server.db.models import OrmL3Persona
+    result = await db.execute(
+        OrmL3Persona.__table__.delete().where(
+            OrmL3Persona.user_id == user_id,
+            OrmL3Persona.agent_id == agent_id,
+        )
+    )
+    await db.commit()
+    if result.rowcount == 0:
+        raise HTTPException(404, "画像不存在")
 
 
 # ═══════════════════════════════════════════════════════════════

@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { HubSkill, InstalledSkill, CustomSkillDef, CreateCustomSkillRequest, McpHubServer, McpInstalledServer, CustomMcpServer, CreateCustomMcpRequest, McpConnectionStatus, McpToolDef, McpInstallResponse, McpLocalOverride, MemoryItem, RuleItem } from '../types'
+import type { HubSkill, InstalledSkill, CustomSkillDef, CreateCustomSkillRequest, McpHubServer, McpInstalledServer, CustomMcpServer, CreateCustomMcpRequest, McpConnectionStatus, McpToolDef, McpInstallResponse, McpLocalOverride, L1MemoryItem, L2SceneItem, L3PersonaItem, RuleItem } from '../types'
 import {
   fetchMcpHub, fetchMcpInstalled, fetchMcpCustom,
   installMcpApi, uninstallMcpApi, createCustomMcpApi, deleteCustomMcpApi,
@@ -7,7 +7,9 @@ import {
   installSkillApi, uninstallSkillApi, enableSkillApi, disableSkillApi,
   createCustomSkillApi, deleteCustomSkillApi,
   reportMcpTools,
-  fetchMemories, saveMemory, deleteMemoryApi,
+  fetchL1Memories, deleteL1Memory,
+  fetchL2Scenes, deleteL2Scene,
+  fetchL3Personas, deleteL3Persona,
   fetchRules, saveRule, deleteRuleApi
 } from '../services/api'
 import { ipcClient } from '../services/ipcClient'
@@ -166,17 +168,28 @@ interface ConfigState {
   getMcpServersForSession: () => { server_id: string; server_name: string; enabled_tools?: string[] }[]
   reportMcpToolsToSession: () => Promise<void>
 
-  // Memories & Rules — API-backed
-  memories: MemoryItem[]
-  memoriesLoading: boolean
-  memoriesError: string | null
+  // L1 原子记忆 & Rules — API-backed
+  l1Memories: L1MemoryItem[]
+  l1MemoriesLoading: boolean
+  l1MemoriesError: string | null
+  // L2 场景记忆（由 L1 整合而来）
+  l2Scenes: L2SceneItem[]
+  l2ScenesLoading: boolean
+  l2ScenesError: string | null
+  // L3 画像记忆（由 L2 场景整合而来，一个作用域一行）
+  l3Personas: L3PersonaItem[]
+  l3PersonasLoading: boolean
+  l3PersonasError: string | null
   rules: RuleItem[]
   rulesLoading: boolean
   rulesError: string | null
 
-  loadMemories: () => Promise<void>
-  saveMemoryAction: (req: { name: string; description: string; type: string; content: string; protected: boolean }) => Promise<void>
-  deleteMemoryAction: (id: string) => Promise<void>
+  loadL1Memories: () => Promise<void>
+  deleteL1MemoryAction: (id: string) => Promise<void>
+  loadL2Scenes: () => Promise<void>
+  deleteL2SceneAction: (id: string) => Promise<void>
+  loadL3Personas: () => Promise<void>
+  deleteL3PersonaAction: (agentId: string) => Promise<void>
   loadRules: () => Promise<void>
   saveRuleAction: (req: { name: string; description: string; content: string; priority: number }) => Promise<void>
   deleteRuleAction: (id: string) => Promise<void>
@@ -211,10 +224,16 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
   mcpConnectionStatuses: {},
   mcpDiscoveredTools: {},
 
-  // Memories & Rules
-  memories: [],
-  memoriesLoading: false,
-  memoriesError: null,
+  // L1 原子记忆 & Rules
+  l1Memories: [],
+  l1MemoriesLoading: false,
+  l1MemoriesError: null,
+  l2Scenes: [],
+  l2ScenesLoading: false,
+  l2ScenesError: null,
+  l3Personas: [],
+  l3PersonasLoading: false,
+  l3PersonasError: null,
   rules: [],
   rulesLoading: false,
   rulesError: null,
@@ -630,27 +649,56 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
     }
   },
 
-  // Memories & Rules actions
-  loadMemories: async () => {
+  // L1 原子记忆 & Rules actions
+  loadL1Memories: async () => {
     const s = get()
-    if (s.memoriesLoading) return
-    set({ memoriesLoading: true, memoriesError: null })
+    if (s.l1MemoriesLoading) return
+    set({ l1MemoriesLoading: true, l1MemoriesError: null })
     try {
-      const data = await fetchMemories()
-      set({ memories: data.memories, memoriesLoading: false })
+      const data = await fetchL1Memories({ limit: 500 })
+      set({ l1Memories: data.memories, l1MemoriesLoading: false })
     } catch (err: any) {
-      set({ memoriesError: err.message || '加载记忆失败', memoriesLoading: false })
+      set({ l1MemoriesError: err.message || '加载原子记忆失败', l1MemoriesLoading: false })
     }
   },
 
-  saveMemoryAction: async (req) => {
-    await saveMemory(req)
-    await get().loadMemories()
+  deleteL1MemoryAction: async (id) => {
+    await deleteL1Memory(id)
+    await get().loadL1Memories()
   },
 
-  deleteMemoryAction: async (id) => {
-    await deleteMemoryApi(id)
-    await get().loadMemories()
+  loadL2Scenes: async () => {
+    const s = get()
+    if (s.l2ScenesLoading) return
+    set({ l2ScenesLoading: true, l2ScenesError: null })
+    try {
+      const data = await fetchL2Scenes({ limit: 500 })
+      set({ l2Scenes: data.scenes, l2ScenesLoading: false })
+    } catch (err: any) {
+      set({ l2ScenesError: err.message || '加载场景记忆失败', l2ScenesLoading: false })
+    }
+  },
+
+  deleteL2SceneAction: async (id) => {
+    await deleteL2Scene(id)
+    await get().loadL2Scenes()
+  },
+
+  loadL3Personas: async () => {
+    const s = get()
+    if (s.l3PersonasLoading) return
+    set({ l3PersonasLoading: true, l3PersonasError: null })
+    try {
+      const data = await fetchL3Personas({ limit: 200 })
+      set({ l3Personas: data.personas, l3PersonasLoading: false })
+    } catch (err: any) {
+      set({ l3PersonasError: err.message || '加载画像记忆失败', l3PersonasLoading: false })
+    }
+  },
+
+  deleteL3PersonaAction: async (agentId) => {
+    await deleteL3Persona(agentId)
+    await get().loadL3Personas()
   },
 
   loadRules: async () => {

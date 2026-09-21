@@ -293,13 +293,42 @@ export interface SkillInstallResult {
   extract_path: string
 }
 
-export interface MemoryItem {
+// L1 原子记忆：服务端从对话里自动抽取的结构化事实碎片（只读，仅可删）
+export interface L1MemoryItem {
+  id: string
+  content: string
+  type: 'persona' | 'episodic' | 'instruction'
+  priority: number
+  scene_name: string
+  agent_id: string
+  activity_start_time?: string | null
+  activity_end_time?: string | null
+  version: number
+  created_at: string
+  updated_at: string
+}
+
+// L2 场景记忆：由 L1 记忆整合出的跨会话叙事（只读，仅可删）
+export interface L2SceneItem {
   id: string
   name: string
-  description: string
-  type: 'user' | 'feedback' | 'project' | 'reference'
+  summary: string
   content: string
-  protected: boolean
+  heat: number
+  version: number
+  agent_id: string
+  source_memory_ids: string[]
+  created_at: string
+  updated_at: string
+}
+
+// L3 画像记忆：由 L2 场景叙事综合出的身份文档，一条用户消息前整份注入
+// system 提示词（只读，仅可删）。一个作用域一行，所以没有 id —— agent_id 即主键。
+export interface L3PersonaItem {
+  agent_id: string
+  content: string
+  version: number
+  memory_count_at_generation: number
   created_at: string
   updated_at: string
 }

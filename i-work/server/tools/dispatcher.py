@@ -3,11 +3,11 @@ from enum import Enum
 
 class ToolLocation(str, Enum):
     CLIENT = "client"    # Electron 前端本地执行 / 客户端 MCP 工具
-    SERVER = "server"    # 服务端直执行：记忆/召回工具（直接读写 DB）
+    SERVER = "server"    # 服务端直执行：记忆检索/召回工具（直接读写 DB）
 
 
-# 记忆 & 规则工具 → 服务端直接读写 DB
-SERVER_MEMORY_TOOLS = {"load_memory", "write_memory", "delete_memory", "recall"}
+# 服务端直执行的内置工具
+SERVER_BUILTIN_TOOLS = {"recall", "memory_search", "scene_read"}
 
 
 class ToolDispatcher:
@@ -15,7 +15,7 @@ class ToolDispatcher:
 
     def classify(self, tool_name: str) -> ToolLocation:
         """判断工具应在客户端还是服务端执行。"""
-        if tool_name in SERVER_MEMORY_TOOLS:
+        if tool_name in SERVER_BUILTIN_TOOLS:
             return ToolLocation.SERVER
         # 兜底一律发客户端：客户端 MCP / 内置工具 / LLM 幻觉出的工具名都由前端处理
         return ToolLocation.CLIENT

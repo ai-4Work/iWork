@@ -60,7 +60,7 @@ class Settings(BaseSettings):
     # 使用: server/engine/query_loop.py:1846,1850,1858,1862（截断续写分支）
     max_truncation_retries: int = 3
     # 单轮读段 fan-out 的并发闸门：限制同时在飞的读工具回投数（服务端读工具
-    # 如 skill / recall / load_memory 会真的读库与跑 TF-IDF）
+    # 如 skill / recall / memory_search 会真的读库与跑 TF-IDF）
     # 使用: server/engine/query_loop.py（QueryLoopEngine._read_semaphore）
     max_read_concurrency: int = 8
     # 进程内引擎注册表容量上限；达到上限时驱逐最老的空闲引擎（绝不驱逐在跑的）
@@ -75,6 +75,76 @@ class Settings(BaseSettings):
     # 仅当 agent 的 .md frontmatter 与工具入参都没给 fork_turns 时生效
     # 使用: server/engine/fork.py（normalize_fork_turns）
     fork_turns_default: str = "3"
+
+    # ── L1 原子记忆（docs/chapters/5-记忆模块） ──
+    # 总开关：false 时不起调度 sweep、不召回、不注册 memory_search 工具
+    l1_enabled: bool = False
+    # 抽取用的模型；留空回落到 compression_model（同属"便宜模型"档）
+    l1_extraction_model: str = ""
+    # 阈值触发：本会话累积的 user 消息条数达到该值就抽一次（doc L1-1.2 触发①）
+    l1_turn_threshold: int = 5
+    # 空闲兜底：距上次抽取超过该分钟数且仍有未抽消息就抽（触发②）
+    l1_idle_minutes: int = 10
+    # 每次抽取送进模型的新消息条数上限（doc L1-2.3）
+    l1_batch_size: int = 10
+    # 上下文用的背景消息条数上限（严禁从中提取记忆）
+    l1_background_size: int = 5
+    # 每批抽取的记忆条数上限，超出截断（doc L1-2.4 第④步）
+    l1_max_memories_per_run: int = 10
+    # sweep 轮询间隔（秒）。轮询而非 per-session 计时器：游标落库，重启不丢
+    l1_sweep_interval_seconds: int = 60
+    # 召回：取几条、相似度阈值、整体超时（doc L1-3.3）
+    # 阈值默认 0.15 而不是文档的 0.3：文档那个数是**向量余弦**标定的，当前实现是
+    # TF-IDF 余弦，量纲不同。实测相关命中约 0.28、无关约 0.10，0.3 会把全部命中
+    # 过滤掉（召回直接失效）。换成向量检索后应回调到 0.3。
+    l1_recall_top_k: int = 5
+    l1_recall_min_score: float = 0.15
+    l1_recall_timeout_seconds: float = 5.0
+    # 召回预算：单条记忆字符上限、召回总字符上限（doc L1-3.5）
+    l1_recall_per_memory_chars: int = 500
+    l1_recall_max_chars: int = 2000
+    # memory_search 每轮（消息级）合计最大调用次数（doc L1-3.5）
+    l1_search_tool_max_calls: int = 3
+    # 去重候选召回：每条新记忆取相似度最高的前 N 条做候选（doc L1-2.5）
+    l1_dedup_candidate_top_k: int = 5
+
+    # ── L2 场景记忆（docs/chapters/5-记忆模块 第二部分） ──
+    # 总开关：false 时不起 sweep、不注入导航、不注册 scene_read 工具。
+    # 依赖 L1（L2 吃 l1_memories 的产出），只开 L2 无意义 —— 装配处会打 warning。
+    l2_enabled: bool = False
+    # 整合用的模型；留空依次回落到 l1_extraction_model / compression_model
+    l2_consolidation_model: str = ""
+    # 场景数量上限（doc 默认 15）。**只喂给提示词做三级预警**，工程侧不强制裁剪
+    # ——doc L2-2.3 明确"上限靠 LLM 自觉遵守"。
+    l2_max_scenes: int = 15
+    # 每轮读入的新 L1 记忆条数上限（doc L2-2.2 "每批 20 条"）
+    l2_batch_memories: int = 20
+    # 连带正文注入的场景个数（按 TF-IDF 相似度选）
+    l2_candidate_scenes: int = 5
+    # 候选场景正文注入的总字符预算
+    l2_candidate_chars: int = 12000
+    # 单个场景正文的字符上限（doc L2-4.1 模板）
+    l2_scene_max_chars: int = 1500
+    # 场景导航注入 system 的字符预算（超预算按热度降序丢尾）
+    l2_nav_max_chars: int = 4000
+    # scene_read 每轮（消息级）合计最大调用次数
+    l2_scene_read_max_calls: int = 3
+    # 整合时机（doc L2-1.2）：级联延迟 / 最小间隔 / 保底轮询
+    l2_cascade_delay_seconds: int = 10
+    l2_min_interval_seconds: int = 900
+    l2_max_interval_seconds: int = 3600
+
+    # ── L3 画像记忆（docs/chapters/5-记忆模块 第三部分） ──
+    # 总开关：false 时不做生成、不注入画像。**依赖 L2**（L3 吃 l2_scenes 的产出），
+    # 只开 L3 无意义 —— 装配处会打 warning。
+    l3_enabled: bool = False
+    # 生成用的模型；留空依次回落到 l1_extraction_model / compression_model
+    l3_generation_model: str = ""
+    # 提示词模式（doc L3-4"两套提示词的来源与选择"）：chat = 个人画像 | code = 团队
+    # Operating Doctrine。只认这两个值，未知值按 chat。
+    l3_mode: str = "chat"
+    # P4 阈值：自上次画像以来新增的 L1 记忆数达到该值就重新生成画像（doc L3-1.2）
+    l3_memory_threshold: int = 50
 
     # ── 流缓冲 ──
     # 流式事件的环形缓冲区容量；供客户端断线重连时补齐历史事件

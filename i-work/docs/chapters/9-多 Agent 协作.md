@@ -355,9 +355,13 @@ expert_hub
 3. 当前日期
 4. <available_skills> XML（按子 agent 配置过滤）
 5. <rules> XML（按子 agent 配置，继承或自定义）
-6. <available_memories> XML（继承父 agent）
-7. 输出规范指令（<final_output> 标签要求，框架注入）
+6. <memory-tools-guide>（L1 记忆工具使用指南，静态文本）
 ```
+
+L1 的原子记忆**不按 agent 继承**：作用域是 `(user_id, agent_path)`，子 agent 有自己的
+`agent_path` 和自己的会话历史，因此抽出的记忆天然与父隔离。相关的原子记忆拼在用户
+消息前缀（`<relevant-memories>`），不占 system 段——system 每轮字节级不变才能命中
+提示词缓存。
 
 ### 9.7 生命周期与调试
 

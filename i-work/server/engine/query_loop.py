@@ -31,7 +31,7 @@ from server.sync_waiter import SyncWaiter, user_wait_key, tool_wait_key
 from server.engine.stream_buffer import StreamBuffer
 from server.engine.context import ContextManager
 from server.llm.client import LLMClient, LLMChunk
-from server.tools.dispatcher import ToolDispatcher, ToolLocation, SERVER_MEMORY_TOOLS
+from server.tools.dispatcher import ToolDispatcher, ToolLocation, SERVER_BUILTIN_TOOLS
 from server.tools.idempotency import (
     tool_idempotency as _tool_idempotency,      # C-3 幂等档
     tool_side_effect as _tool_side_effect,      # D 副作用账本筛子（read-only 永不落账）
@@ -152,58 +152,8 @@ class _PendingTool:
 # ═══════════════════════════════════════════════════════════════
 
 # ═══════════════════════════════════════════════════════════════
-# Memory 工具定义（服务端工具，直接读写 DB）
+# 服务端内置工具定义（直接读写 DB）
 # ═══════════════════════════════════════════════════════════════
-
-MEMORY_TOOLS = [
-    {
-        "name": "load_memory",
-        "description": (
-            "加载指定记忆的完整内容。"
-            "当对话涉及用户偏好、历史决策、项目背景时调用此工具获取上下文。"
-            "记忆名必须从 system prompt 的 <available_memories> 索引中选取，不要凭空编造。"
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "name": {"type": "string", "description": "记忆名称，从 <available_memories> 索引中选取，如 'user_role'"}
-            },
-            "required": ["name"]
-        }
-    },
-    {
-        "name": "write_memory",
-        "description": (
-            "写入或更新一条记忆。在了解到以下信息时应主动保存：\n"
-            "- user 类：用户角色、偏好、技能水平\n"
-            "- feedback 类：用户纠正或确认了某种做法\n"
-            "- project 类：项目目标、截止日期、架构决策\n"
-            "- reference 类：外部系统信息\n"
-            "同名记忆存在时自动更新；保存前检查内容是否已有且一致，避免重复写入。"
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "name": {"type": "string", "description": "记忆名称，如 'feedback_testing'"},
-                "description": {"type": "string", "description": "一行描述，用于 MEMORY.md 索引"},
-                "type": {"type": "string", "enum": ["user", "feedback", "project", "reference"]},
-                "content": {"type": "string", "description": "记忆正文（Markdown）"}
-            },
-            "required": ["name", "description", "type", "content"]
-        }
-    },
-    {
-        "name": "delete_memory",
-        "description": "删除一条记忆。当发现记忆内容已过时、错误，或用户明确要求删除时调用。",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "name": {"type": "string", "description": "要删除的记忆名称"}
-            },
-            "required": ["name"]
-        }
-    },
-]
 
 # 10.5.3 外部记忆召回工具（服务端，TF-IDF 检索卸载块）
 RECALL_TOOLS = [
@@ -221,6 +171,45 @@ RECALL_TOOLS = [
             },
             "required": ["query"]
         }
+    },
+]
+
+# 记忆模块 L1 主动检索工具（服务端，查 l1_memories）
+MEMORY_SEARCH_TOOLS = [
+    {
+        "name": "memory_search",
+        "description": (
+            "搜索长期记忆（用户偏好、历史事件、长期规则等结构化原子记忆）。"
+            "当上方注入的 <relevant-memories> 不足以回答用户问题时调用。"
+            "每轮对话最多调用 3 次。"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "检索关键词或问题"},
+                "top_k": {"type": "integer", "description": "返回条数，默认 5"},
+            },
+            "required": ["query"],
+        },
+    },
+]
+
+# 记忆模块 L2 主动读取工具（服务端，查 l2_scenes）
+SCENE_READ_TOOLS = [
+    {
+        "name": "scene_read",
+        "description": (
+            "按场景名读取完整场景正文（跨会话整合出的历史情境叙事）。"
+            "当上方 <scene-navigation> 里的摘要不足以回答用户问题时调用。"
+            "场景名必须取自导航列出的名字。每轮对话最多调用 3 次。"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "场景名（取自场景导航）"},
+            },
+            "required": ["name"],
+        },
     },
 ]
 
@@ -244,6 +233,9 @@ class EngineManager:
         user_mcp_repo=None,  # UserMcpRepo | None
         tool_invocation_repo=None,  # ToolInvocationRepository | None（C-1 账本）
         event_bus: EventBus | None = None,
+        memory_recall=None,  # L1RecallService | None — L1 记忆召回（未启用时为 None）
+        scene_recall=None,  # L2RecallService | None — L2 场景召回（未启用时为 None）
+        persona_recall=None,  # L3RecallService | None — L3 画像召回（未启用时为 None）
     ):
         from server.storage.postgres import ConversationHistoryRepo, ExpertHubRepo, TeamHubRepo
 
@@ -254,6 +246,9 @@ class EngineManager:
         self.skill_registry = skill_registry
         self.user_mcp_repo = user_mcp_repo
         self.event_bus = event_bus
+        self.memory_recall = memory_recall
+        self.scene_recall = scene_recall
+        self.persona_recall = persona_recall
         self._engines: dict[UUID, "QueryLoopEngine"] = {}
 
         # Compression-dedicated LLM client (Haiku for Anthropic, reuse for DeepSeek)
@@ -362,6 +357,9 @@ class EngineManager:
                 event_bus=self.event_bus,
                 offload_store=self._offload_store,
                 invocation_repo=self._invocation_repo,
+                memory_recall=self.memory_recall,
+                scene_recall=self.scene_recall,
+                persona_recall=self.persona_recall,
             )
             # Wire agent-related dependencies
             engine._expert_repo = self._expert_repo
@@ -451,6 +449,9 @@ class QueryLoopEngine:
         event_bus: EventBus | None = None,
         offload_store=None,  # OffloadStore | None — 10.5.3 external memory
         invocation_repo=None,  # ToolInvocationRepository | None（C-1 工具账本）
+        memory_recall=None,  # L1RecallService | None — L1 记忆召回（未启用时为 None）
+        scene_recall=None,  # L2RecallService | None — L2 场景召回（未启用时为 None）
+        persona_recall=None,  # L3RecallService | None — L3 画像召回（未启用时为 None）
     ):
         self.session = session
         self._session_repo = session_repo
@@ -461,6 +462,18 @@ class QueryLoopEngine:
         self._session_factory = session_factory  # async_sessionmaker | None
         self._event_bus = event_bus  # EventBus | None
         self._invocation_repo = invocation_repo  # ToolInvocationRepository | None
+        # L1 记忆召回（memory_recall.py 的 `L1RecallService`）。None = 记忆模块未启用：
+        # 不召回、不注入工具指南、不注册 memory_search 工具。
+        self._memory_recall = memory_recall
+        # memory_search 每轮合计限次计数（消息级，_run_message_loop 开头清零）
+        self._memory_search_calls = 0
+        # L2 场景导航与按名读取（l2/recall.py 的 `L2RecallService`）。独立限次计数：
+        # 与 memory_search 共用会静默改变"memory_search 每轮限 3 次"的既有语义。
+        self._scene_recall = scene_recall
+        self._scene_read_calls = 0
+        # L3 画像（l3/recall.py 的 `L3RecallService`）。整份注入 system 末尾，没有工具、
+        # 没有限次、也不按输入检索 —— 只有"有没有画像行"这一种分支。
+        self._persona_recall = persona_recall
 
         self.state = "IDLE"
         self._wake_event = asyncio.Event()
@@ -568,6 +581,27 @@ class QueryLoopEngine:
             session_id=str(self.session.id),
             user_id=str(self.session.user_id),
         )
+
+    @property
+    def _agent_scope(self) -> str:
+        """L1 记忆的作用域标识（设计文档 teamId + agentId 的 agentId 半边）。
+
+        用会话的 agent_path：顶层会话 /root，子 agent /root/{member_id} —— 子 agent
+        有自己的 conversation_history，因此各自独立抽取向、各自独立召回。
+        """
+        return getattr(self.session, "agent_path", "") or ""
+
+    def _memory_guides(self) -> str:
+        """记忆工具指南（稳定部分）：L1 的与 L2 的拼接后一起进 system 末尾。
+
+        两者都关掉时返回空串，行为与未接线时完全一致。
+        """
+        parts = []
+        if self._memory_recall is not None:
+            parts.append(self._memory_recall.guide_xml)
+        if self._scene_recall is not None:
+            parts.append(self._scene_recall.guide_xml)
+        return "\n\n".join(p for p in parts if p)
 
     async def _emit(self, event_type: AgentEventType, data: dict, *, message_id: UUID | None = None) -> None:
         """通过 EventBus 发射事件（仅 Stream + Audit 消费）。"""
@@ -1664,6 +1698,35 @@ class QueryLoopEngine:
         elif reprocess_mode == "continue":
             turn = await self._resume_turn_start(msg.id)
 
+        # ── L1 记忆召回：每条用户消息算一次，整个工具循环复用 ──
+        # 刻意不放进 ContextManager.build()：build() 每个 turn（工具调用轮）都调一次，
+        # 放那儿会重复检索，且"最后一条 user 消息"会随工具结果追加而漂移。
+        recall_block = ""
+        self._memory_search_calls = 0
+        if self._memory_recall is not None:
+            recall_block = await self._memory_recall.recall_block(
+                user_id=str(msg.user_id),
+                agent_id=self._agent_scope,
+                query=msg.content or "",
+            )
+
+        # ── L2 场景导航：同样每条消息算一次（导航全量、不过滤，不进用户前缀）──
+        scene_nav_xml = ""
+        self._scene_read_calls = 0
+        if self._scene_recall is not None:
+            scene_nav_xml = await self._scene_recall.navigation_xml(
+                user_id=str(msg.user_id),
+                agent_id=self._agent_scope,
+            )
+
+        # ── L3 画像：整份注入 system 末尾的稳定区（比场景导航变得少，排在它前面）──
+        persona_xml = ""
+        if self._persona_recall is not None:
+            persona_xml = await self._persona_recall.persona_xml(
+                user_id=str(msg.user_id),
+                agent_id=self._agent_scope,
+            )
+
         while turn < settings.max_turns and not terminal:
 
             # ── 超时检查 ──
@@ -1706,13 +1769,15 @@ class QueryLoopEngine:
                     else:
                         available_skills_xml = await self._skills.build_available_skills_xml(UUID(msg.user_id)) if self._skills else ""
                     rules_xml = await self._build_rules_xml()
-                    memories_xml = await self._build_memories_xml()
                     agents_xml = self._build_team_members_xml()
                     server_tools = []
                     if available_skills_xml:
                         server_tools.append(SKILL_TOOL_DEFINITION)
-                    server_tools.extend(MEMORY_TOOLS)
                     server_tools.extend(RECALL_TOOLS)
+                    if self._memory_recall is not None:
+                        server_tools.extend(MEMORY_SEARCH_TOOLS)
+                    if self._scene_recall is not None:
+                        server_tools.extend(SCENE_READ_TOOLS)
                     # Inject task tool for team lead
                     task_tool_def = self._build_task_tool_definition()
                     if task_tool_def:
@@ -1731,11 +1796,14 @@ class QueryLoopEngine:
                         server_tools=server_tools,
                         available_skills_xml=available_skills_xml,
                         rules_xml=rules_xml,
-                        memories_xml=memories_xml,
                         available_agents_xml=agents_xml,
                         system_prompt_override=prompt_override,
                         offload_store=self._offload_store,
                         shell_env=getattr(self.session, "shell_env", ""),
+                        recall_block=recall_block,
+                        memory_guide_xml=self._memory_guides(),
+                        persona_xml=persona_xml,
+                        scene_nav_xml=scene_nav_xml,
                     )
                     ctx_span.set_attributes({
                         "context.estimated_tokens": len(ctx.system_prompt) // 4 + sum(len(json.dumps(m)) // 4 for m in ctx.messages),
@@ -2703,8 +2771,13 @@ class QueryLoopEngine:
                 else:
                     if tool_name == "recall":
                         result = await self._execute_recall_tool(tool_input)
+                    elif tool_name == "memory_search":
+                        result = await self._execute_memory_search(tool_input)
+                    elif tool_name == "scene_read":
+                        result = await self._execute_scene_read(tool_input)
                     else:
-                        result = await self._execute_memory_tool(tool_name, tool_input)
+                        result = {"status": "error",
+                                  "error": f"未实现的服务端工具: {tool_name}"}
                     await self._mark_invocation(
                         invocation_id, InvocationState.COMPLETED, result=result,
                     )
@@ -2880,7 +2953,7 @@ class QueryLoopEngine:
         return merged
 
     # ═══════════════════════════════════════════════════════════
-    # Rules 全文 / Memory 索引构建
+    # Rules 全文构建
     # ═══════════════════════════════════════════════════════════
 
     async def _build_rules_xml(self) -> str:
@@ -2903,109 +2976,6 @@ class QueryLoopEngine:
         lines.append("</rules>")
         return "\n".join(lines)
 
-    async def _build_memories_xml(self) -> str:
-        """从 DB 查询当前用户的记忆索引，拼接为 <available_memories> XML。"""
-        if self._session_factory is None:
-            return ""
-        from server.db.models import OrmMemory
-        async with self._session_factory() as db:
-            rows = (await db.execute(
-                OrmMemory.__table__.select()
-                .where(OrmMemory.user_id == self.session.user_id)
-                .order_by(OrmMemory.updated_at.desc())
-                .limit(200)
-            )).mappings().all()
-        if not rows:
-            return ""
-        lines = [
-            "<available_memories>",
-            "以下是已保存的记忆，可调用 load_memory(name) 加载完整内容，调用 write_memory / delete_memory 管理：",
-        ]
-        for r in rows:
-            lines.append(f"- {r['name']} — {r['description']}")
-        lines.append("</available_memories>")
-        return "\n".join(lines)
-
-    # ═══════════════════════════════════════════════════════════
-    # Memory 工具执行
-    # ═══════════════════════════════════════════════════════════
-
-    async def _execute_memory_tool(self, tool_name: str, tool_input: dict) -> dict:
-        """执行 memory/rule 工具，直接读写 DB。"""
-        if self._session_factory is None:
-            return {"status": "error", "error": "数据库未连接"}
-
-        user_id = self.session.user_id
-
-        async with self._session_factory() as db:
-            if tool_name == "load_memory":
-                from server.db.models import OrmMemory
-                name = tool_input.get("name", "")
-                row = (await db.execute(
-                    OrmMemory.__table__.select()
-                    .where(OrmMemory.user_id == user_id, OrmMemory.name == name)
-                )).mappings().first()
-                if row is None:
-                    return {"status": "not_found", "name": name}
-                return {"status": "ok", "name": name, "content": row["content"]}
-
-            elif tool_name == "write_memory":
-                from server.db.models import OrmMemory
-                from datetime import datetime, timezone
-                name = tool_input.get("name", "")
-                description = tool_input.get("description", "")
-                mem_type = tool_input.get("type", "user")
-                content = tool_input.get("content", "")
-
-                existing = (await db.execute(
-                    OrmMemory.__table__.select()
-                    .where(OrmMemory.user_id == user_id, OrmMemory.name == name)
-                )).mappings().first()
-
-                if existing:
-                    elapsed = (datetime.now(timezone.utc) - existing["updated_at"]).total_seconds()
-                    if elapsed < 60:
-                        return {"status": "skipped", "name": name,
-                                "reason": "1 分钟内已更新，跳过"}
-                    await db.execute(
-                        OrmMemory.__table__.update()
-                        .where(OrmMemory.id == existing["id"])
-                        .values(description=description, type=mem_type,
-                                content=content, updated_at=datetime.now(timezone.utc))
-                    )
-                    await db.commit()
-                    return {"status": "updated", "name": name}
-                else:
-                    import uuid as _uuid
-                    await db.execute(
-                        OrmMemory.__table__.insert().values(
-                            id=_uuid.uuid4(), user_id=user_id, name=name,
-                            description=description, type=mem_type, content=content,
-                        )
-                    )
-                    await db.commit()
-                    return {"status": "created", "name": name}
-
-            elif tool_name == "delete_memory":
-                from server.db.models import OrmMemory
-                name = tool_input.get("name", "")
-                row = (await db.execute(
-                    OrmMemory.__table__.select()
-                    .where(OrmMemory.user_id == user_id, OrmMemory.name == name)
-                )).mappings().first()
-                if row is None:
-                    return {"status": "not_found", "name": name}
-                if row["protected"]:
-                    return {"status": "rejected", "name": name,
-                            "reason": "该记忆被标记为 protected，AI 不可删除"}
-                await db.execute(
-                    OrmMemory.__table__.delete().where(OrmMemory.id == row["id"])
-                )
-                await db.commit()
-                return {"status": "deleted", "name": name}
-
-            return {"status": "error", "error": f"未实现的工具: {tool_name}"}
-
     async def _execute_recall_tool(self, tool_input: dict) -> dict:
         """10.5.3 外部记忆召回：TF-IDF 检索卸载块。"""
         if self._offload_store is None:
@@ -3025,6 +2995,94 @@ class QueryLoopEngine:
             for r in results
         ]
         return {"status": "ok", "query": query, "blocks": blocks}
+
+    async def _execute_memory_search(self, tool_input: dict) -> dict:
+        """L1 记忆主动检索（doc L1-3.5 主动检索兜底）。
+
+        每轮（消息级）合计限 settings.l1_search_tool_max_calls 次 —— 计数在
+        _run_message_loop 开头清零，跨 turn 累计，防止模型无休止地搜。
+        """
+        if self._memory_recall is None:
+            return {"status": "error", "error": "记忆模块未启用"}
+
+        limit = settings.l1_search_tool_max_calls
+        if self._memory_search_calls >= limit:
+            return {
+                "status": "exhausted",
+                "error": f"本轮记忆搜索次数已用尽（最多 {limit} 次），请根据已有信息回答",
+            }
+
+        query = tool_input.get("query", "")
+        if not query:
+            return {"status": "error", "error": "memory_search 需要 query 参数"}
+
+        self._memory_search_calls += 1
+        try:
+            top_k = int(tool_input.get("top_k", settings.l1_recall_top_k))
+        except (TypeError, ValueError):
+            top_k = settings.l1_recall_top_k
+
+        try:
+            memories = await self._memory_recall.search(
+                user_id=str(self.session.user_id),
+                agent_id=self._agent_scope,
+                query=query,
+                top_k=top_k,
+            )
+        except Exception as exc:
+            self._log.warning("memory_search_failed", error=str(exc))
+            return {"status": "error", "error": "记忆检索失败"}
+
+        if not memories:
+            return {"status": "searched_nothing_found", "query": query}
+        return {
+            "status": "ok",
+            "query": query,
+            "memories": [m.to_dict() for m in memories],
+        }
+
+    async def _execute_scene_read(self, tool_input: dict) -> dict:
+        """L2 场景按名读取（doc L2-3.5 渐进式披露）。
+
+        每轮（消息级）独立限 settings.l2_scene_read_max_calls 次 —— 与 memory_search
+        各记各的，共用会静默改变 L1 那 3 次的既有语义。
+        """
+        if self._scene_recall is None:
+            return {"status": "error", "error": "场景记忆未启用"}
+
+        limit = settings.l2_scene_read_max_calls
+        if self._scene_read_calls >= limit:
+            return {
+                "status": "exhausted",
+                "error": f"本轮场景读取次数已用尽（最多 {limit} 次），请根据已有信息回答",
+            }
+
+        name = (tool_input.get("name") or "").strip()
+        if not name:
+            return {"status": "error", "error": "scene_read 需要 name 参数"}
+
+        self._scene_read_calls += 1
+        user_id = str(self.session.user_id)
+        scene = await self._scene_recall.read_scene(
+            user_id=user_id, agent_id=self._agent_scope, name=name,
+        )
+        if scene is None:
+            # 未命中回可用名单：等价于文档"只能 read 清单里的文件，禁止编造文件名"
+            available = await self._scene_recall.names(
+                user_id=user_id, agent_id=self._agent_scope,
+            )
+            return {
+                "status": "not_found",
+                "error": f"场景 '{name}' 不存在",
+                "available_scenes": available,
+            }
+        return {
+            "status": "ok",
+            "name": scene.name,
+            "heat": scene.heat,
+            "updated_at": scene.updated_at.isoformat() if scene.updated_at else None,
+            "content": scene.content,
+        }
 
     async def _check_loop_detection(self, chunk: LLMChunk) -> bool:
         """连续 3 次相同工具且输入相同 → 注入上下文警告，让 LLM 自己调整。"""

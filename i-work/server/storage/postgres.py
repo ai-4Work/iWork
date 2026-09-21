@@ -11,13 +11,18 @@ from server.models.session import Session, SessionStatus
 from server.models.message import Message, MessageStatus, SkillInvocation, MCPServerConfig
 from server.models.mail import RUNNABLE_MSG_TYPES, RESULT_MSG_TYPES
 from server.models.tool_invocation import ToolInvocation, InvocationState
+from server.memory.types import L1Memory, L1Checkpoint
+from server.memory.l2.types import L2Scene, L2Checkpoint
+from server.memory.l3.types import L3Persona
 from server.storage.base import (
     SessionRepository, MessageRepository, ToolInvocationRepository,
+    L1MemoryRepository, L2SceneRepository, L3PersonaRepository,
 )
 from server.db.models import (
     OrmUser, OrmSession, OrmMessage, OrmConversationHistory,
     OrmUserSkill, OrmUserMcpServer, OrmSkillHub, OrmMcpHub,
     OrmExpertHub, OrmExpertTeamHub, OrmOffloadedBlock, OrmToolInvocation,
+    OrmL1Memory, OrmL1Checkpoint, OrmL2Scene, OrmL2Checkpoint, OrmL3Persona,
 )
 
 
@@ -486,6 +491,445 @@ class OffloadedBlocksRepo:
                 )
             )
             await db.commit()
+
+
+# ═══════════════════════════════════════════════════════════════
+# L1MemoryRepo（记忆模块：原子记忆 + 抽取游标）
+# ═══════════════════════════════════════════════════════════════
+
+class PgL1MemoryRepo(L1MemoryRepository):
+    def __init__(self, session_factory: async_sessionmaker[AsyncSession]):
+        self._sf = session_factory
+
+    @staticmethod
+    def _coerce_uuid(value) -> _uuid.UUID | None:
+        if value is None:
+            return None
+        return value if isinstance(value, _uuid.UUID) else _uuid.UUID(str(value))
+
+    @classmethod
+    def _to_pydantic(cls, orm: OrmL1Memory) -> L1Memory:
+        return L1Memory(
+            id=orm.id,
+            user_id=str(orm.user_id),
+            content=orm.content,
+            type=orm.type,
+            agent_id=orm.agent_id or "",
+            session_id=str(orm.session_id) if orm.session_id else None,
+            priority=orm.priority or 0,
+            scene_name=orm.scene_name or "",
+            source_message_ids=list(orm.source_message_ids or []),
+            metadata=dict(orm.metadata_json or {}),
+            timestamps=list(orm.timestamps or []),
+            version=orm.version or 1,
+            retrievable=bool(orm.retrievable),
+            created_at=orm.created_at,
+            updated_at=orm.updated_at,
+        )
+
+    async def apply_batch(
+        self, inserts: list[L1Memory], supersede_ids: list[str],
+    ) -> None:
+        now = datetime.now(timezone.utc)
+        async with self._sf() as db:
+            for m in inserts:
+                db.add(OrmL1Memory(
+                    id=m.id,
+                    user_id=self._coerce_uuid(m.user_id),
+                    agent_id=m.agent_id or "",
+                    session_id=self._coerce_uuid(m.session_id),
+                    content=m.content,
+                    type=m.type,
+                    priority=m.priority,
+                    scene_name=m.scene_name or "",
+                    source_message_ids=list(m.source_message_ids),
+                    metadata_json=dict(m.metadata),
+                    timestamps=list(m.timestamps),
+                    version=m.version,
+                    retrievable=m.retrievable,
+                    created_at=m.created_at or now,
+                    updated_at=m.updated_at or now,
+                ))
+            if supersede_ids:
+                await db.execute(
+                    update(OrmL1Memory)
+                    .where(OrmL1Memory.id.in_(supersede_ids))
+                    .values(retrievable=False, updated_at=now)
+                )
+            await db.commit()
+
+    async def get(self, memory_id: str) -> L1Memory | None:
+        async with self._sf() as db:
+            orm = await db.get(OrmL1Memory, memory_id)
+            return self._to_pydantic(orm) if orm else None
+
+    async def list_by_scope(
+        self, user_id: str, agent_id: str, *, retrievable_only: bool = True,
+    ) -> list[L1Memory]:
+        async with self._sf() as db:
+            stmt = select(OrmL1Memory).where(
+                OrmL1Memory.user_id == self._coerce_uuid(user_id),
+                OrmL1Memory.agent_id == (agent_id or ""),
+            )
+            if retrievable_only:
+                stmt = stmt.where(OrmL1Memory.retrievable == True)
+            result = await db.execute(stmt.order_by(OrmL1Memory.updated_at.desc()))
+            return [self._to_pydantic(r) for r in result.scalars()]
+
+    async def list_page(
+        self, user_id: str, *, agent_id: str | None = None,
+        memory_type: str | None = None, limit: int = 200, offset: int = 0,
+    ) -> tuple[list[L1Memory], int]:
+        async with self._sf() as db:
+            stmt = select(OrmL1Memory).where(
+                OrmL1Memory.user_id == self._coerce_uuid(user_id),
+                OrmL1Memory.retrievable == True,
+            )
+            if agent_id is not None:
+                stmt = stmt.where(OrmL1Memory.agent_id == agent_id)
+            if memory_type:
+                stmt = stmt.where(OrmL1Memory.type == memory_type)
+            total = (await db.execute(
+                select(func.count()).select_from(stmt.subquery())
+            )).scalar() or 0
+            result = await db.execute(
+                stmt.order_by(OrmL1Memory.updated_at.desc()).offset(offset).limit(limit)
+            )
+            return [self._to_pydantic(r) for r in result.scalars()], int(total)
+
+    async def delete(self, memory_id: str) -> bool:
+        async with self._sf() as db:
+            orm = await db.get(OrmL1Memory, memory_id)
+            if orm is None:
+                return False
+            await db.delete(orm)
+            await db.commit()
+            return True
+
+    async def get_checkpoint(self, session_id: str) -> L1Checkpoint | None:
+        async with self._sf() as db:
+            orm = await db.get(OrmL1Checkpoint, self._coerce_uuid(session_id))
+            return self._cp_to_pydantic(orm) if orm else None
+
+    async def list_checkpoints(self) -> list[L1Checkpoint]:
+        async with self._sf() as db:
+            result = await db.execute(select(OrmL1Checkpoint))
+            return [self._cp_to_pydantic(r) for r in result.scalars()]
+
+    async def upsert_checkpoint(self, checkpoint: L1Checkpoint) -> None:
+        async with self._sf() as db:
+            await db.merge(OrmL1Checkpoint(
+                session_id=self._coerce_uuid(checkpoint.session_id),
+                user_id=self._coerce_uuid(checkpoint.user_id),
+                agent_id=checkpoint.agent_id or "",
+                last_cursor=checkpoint.last_cursor,
+                last_scene_name=checkpoint.last_scene_name or "",
+                last_extracted_at=checkpoint.last_extracted_at,
+            ))
+            await db.commit()
+
+    @staticmethod
+    def _cp_to_pydantic(orm: OrmL1Checkpoint) -> L1Checkpoint:
+        return L1Checkpoint(
+            session_id=str(orm.session_id),
+            user_id=str(orm.user_id),
+            agent_id=orm.agent_id or "",
+            last_cursor=orm.last_cursor or 0,
+            last_scene_name=orm.last_scene_name or "",
+            last_extracted_at=orm.last_extracted_at,
+        )
+
+    # ── L2 整合侧的两个读口 ─────────────────────────────────────
+
+    async def list_scopes(self) -> list[tuple[str, str]]:
+        async with self._sf() as db:
+            result = await db.execute(
+                select(OrmL1Memory.user_id, OrmL1Memory.agent_id)
+                .where(OrmL1Memory.retrievable == True)
+                .distinct()
+            )
+            return [(str(uid), aid or "") for uid, aid in result.all()]
+
+    async def list_since(
+        self, user_id: str, agent_id: str, since: datetime | None,
+        limit: int = 20,
+    ) -> list[L1Memory]:
+        async with self._sf() as db:
+            stmt = select(OrmL1Memory).where(
+                OrmL1Memory.user_id == self._coerce_uuid(user_id),
+                OrmL1Memory.agent_id == (agent_id or ""),
+                OrmL1Memory.retrievable == True,
+            )
+            if since is not None:
+                stmt = stmt.where(OrmL1Memory.updated_at > since)
+            result = await db.execute(
+                stmt.order_by(OrmL1Memory.updated_at.asc()).limit(limit)
+            )
+            return [self._to_pydantic(r) for r in result.scalars()]
+
+    async def count_by_scope(self, user_id: str, agent_id: str) -> int:
+        async with self._sf() as db:
+            return int((await db.execute(
+                select(func.count()).select_from(OrmL1Memory.__table__).where(
+                    OrmL1Memory.user_id == self._coerce_uuid(user_id),
+                    OrmL1Memory.agent_id == (agent_id or ""),
+                    OrmL1Memory.retrievable == True,
+                )
+            )).scalar() or 0)
+
+
+# ═══════════════════════════════════════════════════════════════
+# L2SceneRepo（记忆模块：场景记忆 + 整合游标）
+# ═══════════════════════════════════════════════════════════════
+
+class PgL2SceneRepo(L2SceneRepository):
+    def __init__(self, session_factory: async_sessionmaker[AsyncSession]):
+        self._sf = session_factory
+
+    @staticmethod
+    def _coerce_uuid(value) -> _uuid.UUID | None:
+        if value is None:
+            return None
+        return value if isinstance(value, _uuid.UUID) else _uuid.UUID(str(value))
+
+    @staticmethod
+    def _to_scene(orm: OrmL2Scene) -> L2Scene:
+        return L2Scene(
+            id=orm.id,
+            user_id=str(orm.user_id),
+            agent_id=orm.agent_id or "",
+            name=orm.name,
+            summary=orm.summary or "",
+            content=orm.content,
+            heat=orm.heat or 1,
+            version=orm.version or 1,
+            source_memory_ids=list(orm.source_memory_ids or []),
+            retrievable=bool(orm.retrievable),
+            created_at=orm.created_at,
+            updated_at=orm.updated_at,
+        )
+
+    async def apply_batch(
+        self, inserts: list[L2Scene], supersede_ids: list[str],
+    ) -> None:
+        now = datetime.now(timezone.utc)
+        async with self._sf() as db:
+            if supersede_ids:
+                # 先软删再插入：名字有局部唯一索引（WHERE retrievable），
+                # merge 后同名重建时旧行必须先让位，(user_id, agent_id, name) 才不撞。
+                await db.execute(
+                    update(OrmL2Scene)
+                    .where(OrmL2Scene.id.in_(supersede_ids))
+                    .values(retrievable=False, updated_at=now)
+                )
+                await db.flush()
+            for s in inserts:
+                db.add(OrmL2Scene(
+                    id=s.id,
+                    user_id=self._coerce_uuid(s.user_id),
+                    agent_id=s.agent_id or "",
+                    name=s.name,
+                    summary=s.summary or "",
+                    content=s.content,
+                    heat=s.heat,
+                    version=s.version,
+                    source_memory_ids=list(s.source_memory_ids),
+                    retrievable=s.retrievable,
+                    created_at=s.created_at or now,
+                    updated_at=s.updated_at or now,
+                ))
+            await db.commit()
+
+    async def get(self, scene_id: str) -> L2Scene | None:
+        async with self._sf() as db:
+            orm = await db.get(OrmL2Scene, scene_id)
+            return self._to_scene(orm) if orm else None
+
+    async def get_by_name(
+        self, user_id: str, agent_id: str, name: str,
+    ) -> L2Scene | None:
+        async with self._sf() as db:
+            result = await db.execute(
+                select(OrmL2Scene).where(
+                    OrmL2Scene.user_id == self._coerce_uuid(user_id),
+                    OrmL2Scene.agent_id == (agent_id or ""),
+                    OrmL2Scene.name == name,
+                    OrmL2Scene.retrievable == True,
+                )
+            )
+            orm = result.scalars().first()
+            return self._to_scene(orm) if orm else None
+
+    async def list_by_scope(
+        self, user_id: str, agent_id: str, *, retrievable_only: bool = True,
+    ) -> list[L2Scene]:
+        async with self._sf() as db:
+            stmt = select(OrmL2Scene).where(
+                OrmL2Scene.user_id == self._coerce_uuid(user_id),
+                OrmL2Scene.agent_id == (agent_id or ""),
+            )
+            if retrievable_only:
+                stmt = stmt.where(OrmL2Scene.retrievable == True)
+            result = await db.execute(
+                stmt.order_by(OrmL2Scene.heat.desc(), OrmL2Scene.updated_at.desc())
+            )
+            return [self._to_scene(r) for r in result.scalars()]
+
+    async def list_page(
+        self, user_id: str, *, agent_id: str | None = None,
+        limit: int = 200, offset: int = 0,
+    ) -> tuple[list[L2Scene], int]:
+        async with self._sf() as db:
+            stmt = select(OrmL2Scene).where(
+                OrmL2Scene.user_id == self._coerce_uuid(user_id),
+                OrmL2Scene.retrievable == True,
+            )
+            if agent_id is not None:
+                stmt = stmt.where(OrmL2Scene.agent_id == agent_id)
+            total = (await db.execute(
+                select(func.count()).select_from(stmt.subquery())
+            )).scalar() or 0
+            result = await db.execute(
+                stmt.order_by(OrmL2Scene.heat.desc(), OrmL2Scene.updated_at.desc())
+                .offset(offset).limit(limit)
+            )
+            return [self._to_scene(r) for r in result.scalars()], int(total)
+
+    async def delete(self, scene_id: str) -> bool:
+        async with self._sf() as db:
+            orm = await db.get(OrmL2Scene, scene_id)
+            if orm is None:
+                return False
+            await db.delete(orm)
+            await db.commit()
+            return True
+
+    async def get_checkpoint(self, user_id: str, agent_id: str) -> L2Checkpoint | None:
+        async with self._sf() as db:
+            orm = await db.get(
+                OrmL2Checkpoint, (self._coerce_uuid(user_id), agent_id or ""),
+            )
+            return self._cp_to_pydantic(orm) if orm else None
+
+    async def list_checkpoints(self) -> list[L2Checkpoint]:
+        async with self._sf() as db:
+            result = await db.execute(select(OrmL2Checkpoint))
+            return [self._cp_to_pydantic(r) for r in result.scalars()]
+
+    async def upsert_checkpoint(self, checkpoint: L2Checkpoint) -> None:
+        async with self._sf() as db:
+            await db.merge(OrmL2Checkpoint(
+                user_id=self._coerce_uuid(checkpoint.user_id),
+                agent_id=checkpoint.agent_id or "",
+                last_memory_at=checkpoint.last_memory_at,
+                last_run_at=checkpoint.last_run_at,
+                processing_count=checkpoint.processing_count,
+                persona_update_request=checkpoint.persona_update_request or "",
+                updated_at=datetime.now(timezone.utc),
+            ))
+            await db.commit()
+
+    @staticmethod
+    def _cp_to_pydantic(orm: OrmL2Checkpoint) -> L2Checkpoint:
+        return L2Checkpoint(
+            user_id=str(orm.user_id),
+            agent_id=orm.agent_id or "",
+            last_memory_at=orm.last_memory_at,
+            last_run_at=orm.last_run_at,
+            processing_count=orm.processing_count or 0,
+            persona_update_request=orm.persona_update_request or "",
+        )
+
+
+# ═══════════════════════════════════════════════════════════════
+# L3PersonaRepo（记忆模块：画像）
+# ═══════════════════════════════════════════════════════════════
+
+class PgL3PersonaRepo(L3PersonaRepository):
+    def __init__(self, session_factory: async_sessionmaker[AsyncSession]):
+        self._sf = session_factory
+
+    @staticmethod
+    def _coerce_uuid(value) -> _uuid.UUID | None:
+        if value is None:
+            return None
+        return value if isinstance(value, _uuid.UUID) else _uuid.UUID(str(value))
+
+    @staticmethod
+    def _to_persona(orm: OrmL3Persona) -> L3Persona:
+        return L3Persona(
+            user_id=str(orm.user_id),
+            agent_id=orm.agent_id or "",
+            content=orm.content,
+            version=orm.version or 1,
+            memory_count_at_generation=orm.memory_count_at_generation or 0,
+            created_at=orm.created_at,
+            updated_at=orm.updated_at,
+        )
+
+    async def get(self, user_id: str, agent_id: str) -> L3Persona | None:
+        async with self._sf() as db:
+            orm = await db.get(
+                OrmL3Persona, (self._coerce_uuid(user_id), agent_id or ""),
+            )
+            return self._to_persona(orm) if orm else None
+
+    async def upsert(self, persona: L3Persona) -> None:
+        """有旧行则覆盖正文、版本 +1，无旧行则插入。**沿用旧 created_at**。
+
+        刻意不用 db.merge：画像的 version 是"每次重写 +1"，而调用方（生成侧）拿不到旧版本号，
+        merge 会把默认的 1 写回去、版本号永远不动。先读旧行再决定插/改，语义才落在库里。
+        """
+        now = datetime.now(timezone.utc)
+        async with self._sf() as db:
+            old = await db.get(
+                OrmL3Persona, (self._coerce_uuid(persona.user_id), persona.agent_id or ""),
+            )
+            if old is None:
+                db.add(OrmL3Persona(
+                    user_id=self._coerce_uuid(persona.user_id),
+                    agent_id=persona.agent_id or "",
+                    content=persona.content,
+                    version=1,
+                    memory_count_at_generation=persona.memory_count_at_generation,
+                    created_at=persona.created_at or now,
+                    updated_at=now,
+                ))
+            else:
+                old.content = persona.content
+                old.version = (old.version or 1) + 1
+                old.memory_count_at_generation = persona.memory_count_at_generation
+                old.updated_at = now
+            await db.commit()
+
+    async def list_page(
+        self, user_id: str, *, agent_id: str | None = None,
+        limit: int = 200, offset: int = 0,
+    ) -> tuple[list[L3Persona], int]:
+        async with self._sf() as db:
+            stmt = select(OrmL3Persona).where(
+                OrmL3Persona.user_id == self._coerce_uuid(user_id),
+            )
+            if agent_id is not None:
+                stmt = stmt.where(OrmL3Persona.agent_id == agent_id)
+            total = (await db.execute(
+                select(func.count()).select_from(stmt.subquery())
+            )).scalar() or 0
+            result = await db.execute(
+                stmt.order_by(OrmL3Persona.updated_at.desc()).offset(offset).limit(limit)
+            )
+            return [self._to_persona(r) for r in result.scalars()], int(total)
+
+    async def delete(self, user_id: str, agent_id: str) -> bool:
+        async with self._sf() as db:
+            orm = await db.get(
+                OrmL3Persona, (self._coerce_uuid(user_id), agent_id or ""),
+            )
+            if orm is None:
+                return False
+            await db.delete(orm)
+            await db.commit()
+            return True
 
 
 # ═══════════════════════════════════════════════════════════════

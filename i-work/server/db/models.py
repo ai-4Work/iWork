@@ -6,7 +6,7 @@ from typing import Optional
 
 from sqlalchemy import (
     String, Text, Integer, BigInteger, Boolean, DateTime, ForeignKey,
-    UniqueConstraint, Index, func,
+    UniqueConstraint, Index, func, text, true as sa_true,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -962,57 +962,7 @@ class OrmExpertTeamHub(Base):
 
 
 # ═══════════════════════════════════════════════════════════════
-# 9. Memories
-# ═══════════════════════════════════════════════════════════════
-
-class OrmMemory(Base):
-    __tablename__ = "memories"
-
-    id: Mapped[_uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=_uuid.uuid4,
-        comment="记忆唯一标识",
-    )
-    user_id: Mapped[_uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("users.id", ondelete="CASCADE"),
-        nullable=False, comment="所属用户",
-    )
-    name: Mapped[str] = mapped_column(
-        String(200), nullable=False, comment="记忆名称（唯一标识），如 user_role",
-    )
-    description: Mapped[str] = mapped_column(
-        String(500), nullable=False, comment="一行描述，用于 MEMORY.md 索引",
-    )
-    type: Mapped[str] = mapped_column(
-        String(20), nullable=False,
-        comment="user | feedback | project | reference",
-    )
-    content: Mapped[str] = mapped_column(
-        Text, nullable=False, comment="记忆正文（Markdown）",
-    )
-    protected: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=False,
-        comment="true 时 AI 不可修改或删除",
-    )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now(),
-        comment="创建时间",
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now(),
-        comment="最后更新时间",
-    )
-
-    __table_args__ = (
-        UniqueConstraint("user_id", "name", name="uq_memories_user_name"),
-        Index("idx_memories_user", "user_id", "updated_at"),
-        Index("idx_memories_type", "user_id", "type"),
-        {"comment": "记忆表：用户长期记忆，AI 自动写入 + 用户手动管理"},
-    )
-
-
-# ═══════════════════════════════════════════════════════════════
-# 10. Rules
+# 9. Rules
 # ═══════════════════════════════════════════════════════════════
 
 class OrmRule(Base):
@@ -1052,6 +1002,295 @@ class OrmRule(Base):
         UniqueConstraint("user_id", "name", name="uq_rules_user_name"),
         Index("idx_rules_user", "user_id", "priority"),
         {"comment": "规则表：用户手动定义的强制性约束，AI 只读"},
+    )
+
+
+# ═══════════════════════════════════════════════════════════════
+# 10. L1 原子记忆
+# ═══════════════════════════════════════════════════════════════
+
+class OrmL1Memory(Base):
+    """L1 原子记忆：从对话自动抽取的结构化事实碎片。
+
+    行永不硬删；被 update/merge 取代的旧行把 retrievable 置 false（软删），
+    既保留事实源与血缘，又不进检索。
+    """
+
+    __tablename__ = "l1_memories"
+
+    id: Mapped[str] = mapped_column(
+        String(64), primary_key=True, comment="m_<epoch_ms>_<hex8>，跨库唯一",
+    )
+    user_id: Mapped[_uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False, comment="作用域：所属用户",
+    )
+    agent_id: Mapped[str] = mapped_column(
+        String(64), nullable=False, server_default="",
+        comment="作用域：agent 标识（顶层为空串）",
+    )
+    session_id: Mapped[Optional[_uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), nullable=True,
+        comment="抽取来源会话（跨会话累积，仅作溯源）",
+    )
+    content: Mapped[str] = mapped_column(
+        Text, nullable=False, comment="自包含的记忆陈述",
+    )
+    type: Mapped[str] = mapped_column(
+        String(20), nullable=False, comment="persona | episodic | instruction",
+    )
+    priority: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0",
+        comment="重要度打分；各类型有各自的丢弃阈值",
+    )
+    scene_name: Mapped[str] = mapped_column(
+        String(200), nullable=False, server_default="",
+        comment="情境名：我（AI）在和xxx做xxx",
+    )
+    source_message_ids: Mapped[list] = mapped_column(
+        JSONB, nullable=False, default=list, server_default="[]",
+        comment="血缘：产出该记忆的 L0 消息 ID",
+    )
+    metadata_json: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default="{}",
+        comment="类型专属元数据；episodic 带活动起止时间",
+    )
+    timestamps: Mapped[list] = mapped_column(
+        JSONB, nullable=False, default=list, server_default="[]",
+        comment="时间轨迹，merge 时并集去重排序",
+    )
+    version: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="1",
+        comment="版本号；update/merge 时为目标最大版本 + 1",
+    )
+    retrievable: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=sa_true(),
+        comment="false = 已被 update/merge 取代（软删），不进检索",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(),
+        comment="创建时间",
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(),
+        comment="最后更新时间",
+    )
+
+    __table_args__ = (
+        Index("idx_l1_memories_scope", "user_id", "agent_id", "retrievable"),
+        Index("idx_l1_memories_session", "session_id"),
+        Index("idx_l1_memories_updated", "updated_at"),
+        {"comment": "L1 原子记忆表：自动抽取的结构化事实碎片"},
+    )
+
+
+class OrmL1Checkpoint(Base):
+    """L1 抽取游标：每条会话一条，落库以便 sweep 重启后续抽。"""
+
+    __tablename__ = "l1_checkpoints"
+
+    session_id: Mapped[_uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("sessions.id", ondelete="CASCADE"),
+        primary_key=True, comment="所属会话",
+    )
+    user_id: Mapped[_uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False,
+        comment="冗余的作用域字段，sweep 单查即可分组",
+    )
+    agent_id: Mapped[str] = mapped_column(
+        String(64), nullable=False, server_default="",
+        comment="作用域：agent 标识",
+    )
+    last_cursor: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default="0",
+        comment="已处理到的 conversation_history.sequence",
+    )
+    last_scene_name: Mapped[str] = mapped_column(
+        String(200), nullable=False, server_default="",
+        comment="上一个情境名，供下次抽取判断是否切换",
+    )
+    last_extracted_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+        comment="上次成功抽取时间，空闲兜底的判据",
+    )
+
+    __table_args__ = (
+        Index("idx_l1_checkpoints_scope", "user_id", "agent_id"),
+        {"comment": "L1 抽取游标：每条会话一条，落库以便重启后续抽"},
+    )
+
+
+# ═══════════════════════════════════════════════════════════════
+# 11. L2 场景记忆
+# ═══════════════════════════════════════════════════════════════
+
+class OrmL2Scene(Base):
+    """L2 场景记忆：一批 L1 原子记忆整合出的跨会话叙事。
+
+    设计文档把场景当磁盘上的 `.md` 文件（LLM 用 read/write/edit 工具操作），本仓库落库 ——
+    于是文档里服务文件系统的机制全部消失（备份/还原 → 事务，`[DELETED]` 标记 → 动作的
+    sources 列表，重建索引 → 表本身就是索引，记忆库镜像 → 本来就在库里），
+    `-----META-START-----` 文件头里的字段变成列。
+
+    与 L1 同款软删：被 merge 取代的场景把 retrievable 置 false，行与血缘保留，
+    唯一的硬删路径是用户在客户端手工删除。
+    """
+
+    __tablename__ = "l2_scenes"
+
+    id: Mapped[str] = mapped_column(
+        String(64), primary_key=True, comment="s_<epoch_ms>_<hex8>，跨库唯一",
+    )
+    user_id: Mapped[_uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False, comment="作用域：所属用户",
+    )
+    agent_id: Mapped[str] = mapped_column(
+        String(64), nullable=False, server_default="",
+        comment="作用域：agent 标识（顶层为空串）",
+    )
+    name: Mapped[str] = mapped_column(
+        String(200), nullable=False,
+        comment="场景名（原文件名），作用域内唯一，导航里对外的键",
+    )
+    summary: Mapped[str] = mapped_column(
+        String(500), nullable=False, server_default="",
+        comment="30-40 字摘要，场景导航用",
+    )
+    content: Mapped[str] = mapped_column(
+        Text, nullable=False, comment="场景叙事正文（markdown，不含 META 头）",
+    )
+    heat: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="1",
+        comment="热度：新建 1 / 更新 旧+1 / 合并 Σ相关+1（doc L2-2.5）",
+    )
+    version: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="1",
+        comment="版本号；update/merge 时为目标最大版本 + 1",
+    )
+    source_memory_ids: Mapped[list] = mapped_column(
+        JSONB, nullable=False, default=list, server_default="[]",
+        comment="血缘：产出该场景的 L1 记忆 ID",
+    )
+    retrievable: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=sa_true(),
+        comment="false = 已被 merge 取代（软删），不进导航",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(),
+        comment="创建时间（update/merge 时沿用目标场景最早的创建时间）",
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(),
+        comment="最后更新时间",
+    )
+
+    __table_args__ = (
+        Index("idx_l2_scenes_scope", "user_id", "agent_id", "retrievable"),
+        Index("idx_l2_scenes_heat", "user_id", "agent_id", "heat"),
+        # 名字是 LLM 引用场景的键，必须唯一 —— 但只约束可检索的行：merge 掉旧场景后
+        # 同名重建不能撞索引（文档"更新现有文件时沿用清单里给的文件名"）。
+        Index(
+            "uq_l2_scenes_scope_name", "user_id", "agent_id", "name",
+            unique=True, postgresql_where=text("retrievable"),
+        ),
+        {"comment": "L2 场景记忆表：L1 原子记忆整合出的跨会话叙事"},
+    )
+
+
+class OrmL2Checkpoint(Base):
+    """L2 整合游标：每个 (user_id, agent_id) 作用域一条。
+
+    维度与 L1 不同 —— L1 是 per 会话，L2 是 per 作用域（doc L2-1.1：刻意忽略用户、会话、
+    任务维度，跨会话累积）。落库而不是放内存，sweep 重启后不丢断点。
+    """
+
+    __tablename__ = "l2_checkpoints"
+
+    user_id: Mapped[_uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, comment="作用域：所属用户",
+    )
+    agent_id: Mapped[str] = mapped_column(
+        String(64), primary_key=True, server_default="",
+        comment="作用域：agent 标识（顶层为空串）",
+    )
+    last_memory_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+        comment="游标：已处理到的 l1_memories.updated_at",
+    )
+    last_run_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+        comment="上次成功整合时间；最小间隔闸门与保底轮询的判据",
+    )
+    processing_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0",
+        comment="单调处理计数（doc L2-2.8；L2 内部只自增，供观测）",
+    )
+    persona_update_request: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default="",
+        comment="LLM 请求刷新 L3 画像的原因（doc L2-2.6 第 4 步）；由 L3 生成侧消费后清空",
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(),
+        comment="最后更新时间",
+    )
+
+    __table_args__ = (
+        {"comment": "L2 整合游标：每个作用域一条，落库以便重启后续整合"},
+    )
+
+
+# ═══════════════════════════════════════════════════════════════
+# 12. L3 画像记忆
+# ═══════════════════════════════════════════════════════════════
+
+class OrmL3Persona(Base):
+    """L3 画像记忆：一行 = 一个作用域的画像（doc L3-2.6）。
+
+    只有这一张表，**没有 l3_checkpoints** —— 画像行本身既是产物也是游标：
+    `updated_at` 就是"上次画像生成时间"（L3-2.2 据此筛变化场景），行的存在与否就是
+    "有没有画像"（L3-2.3 首次/增量、P2 冷启动据此判断），`memory_count_at_generation`
+    是 P4 阈值算增量的快照。
+
+    内容只有正文：场景导航由 L2 侧的表字段渲染，两者从不混存，因此没有"剥导航"这道工序。
+    """
+
+    __tablename__ = "l3_personas"
+
+    user_id: Mapped[_uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        primary_key=True, comment="作用域：所属用户",
+    )
+    agent_id: Mapped[str] = mapped_column(
+        String(64), primary_key=True, server_default="",
+        comment="作用域：agent 标识（顶层为空串）",
+    )
+    content: Mapped[str] = mapped_column(
+        Text, nullable=False, comment="画像正文（后处理之后的最终内容）",
+    )
+    version: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="1",
+        comment="版本号：每次重写 +1，首次插入为 1",
+    )
+    memory_count_at_generation: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0",
+        comment="本次生成时的 L1 记忆总数快照；P4 阈值据『当前总数 − 它』算增量",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(),
+        comment="首次生成时间（增量重写时沿用）",
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(),
+        comment="最后生成时间；L3-2.2 据此筛变化场景",
+    )
+
+    __table_args__ = (
+        {"comment": "L3 画像记忆表：L2 场景叙事综合出的身份文档"},
     )
 
 

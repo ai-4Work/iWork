@@ -1,11 +1,29 @@
 from __future__ import annotations
 import asyncio
+from datetime import datetime, timezone
 from uuid import UUID
+from server.memory.types import L1Memory, L1Checkpoint
+from server.memory.l2.types import L2Scene, L2Checkpoint
+from server.memory.l3.types import L3Persona
 from server.models.session import Session, SessionStatus
 from server.models.message import Message, MessageStatus
 from server.models.mail import RUNNABLE_MSG_TYPES, RESULT_MSG_TYPES
 from server.models.tool_invocation import ToolInvocation, InvocationState
-from server.storage.base import SessionRepository, MessageRepository, ToolInvocationRepository
+from server.storage.base import (
+    SessionRepository, MessageRepository, ToolInvocationRepository,
+    L1MemoryRepository, L2SceneRepository, L3PersonaRepository,
+)
+
+_EPOCH = datetime.min.replace(tzinfo=timezone.utc)
+
+
+def _ts_key(value: datetime | None) -> float:
+    """时间戳排序键：None 当作最早，且保证 tz-naive / aware 混用不炸。"""
+    if value is None:
+        return _EPOCH.timestamp()
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.timestamp()
 
 
 class InMemorySessionRepo(SessionRepository):
@@ -297,6 +315,207 @@ class InMemoryToolInvocationRepo(ToolInvocationRepository):
         ]
         rows.sort(key=lambda inv: inv.created_at)
         return rows
+
+
+class InMemoryL1MemoryRepo(L1MemoryRepository):
+    """L1 原子记忆仓储内存实现（测试 / 无 PG 环境）。
+
+    语义与 PgL1MemoryRepo 对齐：apply_batch 同时插入新行与软删旧行、
+    list_page 只出 retrievable、delete 是硬删。
+    """
+
+    def __init__(self):
+        self._rows: dict[str, L1Memory] = {}
+        self._checkpoints: dict[str, L1Checkpoint] = {}
+
+    async def apply_batch(
+        self, inserts: list[L1Memory], supersede_ids: list[str],
+    ) -> None:
+        now = datetime.now(timezone.utc)
+        for m in inserts:
+            m.created_at = m.created_at or now
+            m.updated_at = m.updated_at or now
+            self._rows[m.id] = m
+        for mid in supersede_ids:
+            row = self._rows.get(mid)
+            if row is not None:
+                row.retrievable = False
+                row.updated_at = now
+
+    async def get(self, memory_id: str) -> L1Memory | None:
+        return self._rows.get(memory_id)
+
+    async def list_by_scope(
+        self, user_id: str, agent_id: str, *, retrievable_only: bool = True,
+    ) -> list[L1Memory]:
+        rows = [
+            m for m in self._rows.values()
+            if m.user_id == user_id and m.agent_id == (agent_id or "")
+            and (m.retrievable or not retrievable_only)
+        ]
+        rows.sort(key=lambda m: m.updated_at or datetime.min.replace(tzinfo=timezone.utc),
+                  reverse=True)
+        return rows
+
+    async def list_page(
+        self, user_id: str, *, agent_id: str | None = None,
+        memory_type: str | None = None, limit: int = 200, offset: int = 0,
+    ) -> tuple[list[L1Memory], int]:
+        rows = [m for m in self._rows.values() if m.user_id == user_id and m.retrievable]
+        if agent_id is not None:
+            rows = [m for m in rows if m.agent_id == agent_id]
+        if memory_type:
+            rows = [m for m in rows if m.type == memory_type]
+        rows.sort(key=lambda m: m.updated_at or datetime.min.replace(tzinfo=timezone.utc),
+                  reverse=True)
+        return rows[offset:offset + limit], len(rows)
+
+    async def delete(self, memory_id: str) -> bool:
+        return self._rows.pop(memory_id, None) is not None
+
+    async def list_scopes(self) -> list[tuple[str, str]]:
+        return sorted({(m.user_id, m.agent_id) for m in self._rows.values() if m.retrievable})
+
+    async def list_since(
+        self, user_id: str, agent_id: str, since: datetime | None,
+        limit: int = 20,
+    ) -> list[L1Memory]:
+        rows = [
+            m for m in self._rows.values()
+            if m.user_id == user_id and m.agent_id == (agent_id or "") and m.retrievable
+            and (since is None or (m.updated_at and m.updated_at > since))
+        ]
+        rows.sort(key=lambda m: _ts_key(m.updated_at))
+        return rows[:limit]
+
+    async def count_by_scope(self, user_id: str, agent_id: str) -> int:
+        return sum(
+            1 for m in self._rows.values()
+            if m.user_id == user_id and m.agent_id == (agent_id or "") and m.retrievable
+        )
+
+    async def get_checkpoint(self, session_id: str) -> L1Checkpoint | None:
+        return self._checkpoints.get(str(session_id))
+
+    async def list_checkpoints(self) -> list[L1Checkpoint]:
+        return list(self._checkpoints.values())
+
+    async def upsert_checkpoint(self, checkpoint: L1Checkpoint) -> None:
+        self._checkpoints[str(checkpoint.session_id)] = checkpoint
+
+
+class InMemoryL2SceneRepo(L2SceneRepository):
+    """L2 场景仓储内存实现（测试 / 无 PG 环境）。
+
+    语义与 PgL2SceneRepo 对齐：apply_batch 同时插入新行与软删被 merge 的旧行、
+    get_by_name / list_page 只认 retrievable、delete 是硬删。
+    """
+
+    def __init__(self):
+        self._rows: dict[str, L2Scene] = {}
+        self._checkpoints: dict[tuple[str, str], L2Checkpoint] = {}
+
+    async def apply_batch(
+        self, inserts: list[L2Scene], supersede_ids: list[str],
+    ) -> None:
+        now = datetime.now(timezone.utc)
+        for sid in supersede_ids:
+            row = self._rows.get(sid)
+            if row is not None:
+                row.retrievable = False
+                row.updated_at = now
+        for s in inserts:
+            s.created_at = s.created_at or now
+            s.updated_at = s.updated_at or now
+            self._rows[s.id] = s
+
+    async def get(self, scene_id: str) -> L2Scene | None:
+        return self._rows.get(scene_id)
+
+    async def get_by_name(
+        self, user_id: str, agent_id: str, name: str,
+    ) -> L2Scene | None:
+        for s in self._rows.values():
+            if (s.user_id == user_id and s.agent_id == (agent_id or "")
+                    and s.name == name and s.retrievable):
+                return s
+        return None
+
+    async def list_by_scope(
+        self, user_id: str, agent_id: str, *, retrievable_only: bool = True,
+    ) -> list[L2Scene]:
+        rows = [
+            s for s in self._rows.values()
+            if s.user_id == user_id and s.agent_id == (agent_id or "")
+            and (s.retrievable or not retrievable_only)
+        ]
+        rows.sort(key=lambda s: (-s.heat, -_ts_key(s.updated_at)))
+        return rows
+
+    async def list_page(
+        self, user_id: str, *, agent_id: str | None = None,
+        limit: int = 200, offset: int = 0,
+    ) -> tuple[list[L2Scene], int]:
+        rows = [s for s in self._rows.values() if s.user_id == user_id and s.retrievable]
+        if agent_id is not None:
+            rows = [s for s in rows if s.agent_id == agent_id]
+        rows.sort(key=lambda s: (-s.heat, -_ts_key(s.updated_at)))
+        return rows[offset:offset + limit], len(rows)
+
+    async def delete(self, scene_id: str) -> bool:
+        return self._rows.pop(scene_id, None) is not None
+
+    async def get_checkpoint(self, user_id: str, agent_id: str) -> L2Checkpoint | None:
+        return self._checkpoints.get((user_id, agent_id or ""))
+
+    async def list_checkpoints(self) -> list[L2Checkpoint]:
+        return list(self._checkpoints.values())
+
+    async def upsert_checkpoint(self, checkpoint: L2Checkpoint) -> None:
+        self._checkpoints[(checkpoint.user_id, checkpoint.agent_id or "")] = checkpoint
+
+
+class InMemoryL3PersonaRepo(L3PersonaRepository):
+    """L3 画像仓储内存实现（测试 / 无 PG 环境）。
+
+    语义与 PgL3PersonaRepo 对齐：upsert 有旧行则版本 +1 并**沿用旧 created_at**，
+    delete 是硬删。
+    """
+
+    def __init__(self):
+        self._rows: dict[tuple[str, str], L3Persona] = {}
+
+    async def get(self, user_id: str, agent_id: str) -> L3Persona | None:
+        return self._rows.get((user_id, agent_id or ""))
+
+    async def upsert(self, persona: L3Persona) -> None:
+        now = datetime.now(timezone.utc)
+        key = (persona.user_id, persona.agent_id or "")
+        old = self._rows.get(key)
+        if old is None:
+            persona.agent_id = persona.agent_id or ""
+            persona.version = 1
+            persona.created_at = persona.created_at or now
+            persona.updated_at = now
+            self._rows[key] = persona
+            return
+        old.content = persona.content
+        old.version = (old.version or 1) + 1
+        old.memory_count_at_generation = persona.memory_count_at_generation
+        old.updated_at = now
+
+    async def list_page(
+        self, user_id: str, *, agent_id: str | None = None,
+        limit: int = 200, offset: int = 0,
+    ) -> tuple[list[L3Persona], int]:
+        rows = [p for p in self._rows.values() if p.user_id == user_id]
+        if agent_id is not None:
+            rows = [p for p in rows if p.agent_id == agent_id]
+        rows.sort(key=lambda p: _ts_key(p.updated_at), reverse=True)
+        return rows[offset:offset + limit], len(rows)
+
+    async def delete(self, user_id: str, agent_id: str) -> bool:
+        return self._rows.pop((user_id, agent_id or ""), None) is not None
 
 
 class InMemoryOffloadedBlocksRepo:

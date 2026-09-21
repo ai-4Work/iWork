@@ -1,8 +1,20 @@
-<p align="center">
-  <img src="./agent-client/resources/icon.svg" alt="iWork" width="128" />
-</p>
+<h1 align="center">
+  <img src="./agent-client/resources/icon.svg" alt="iWork" width="72" align="absmiddle" />
+  &nbsp;iWork
+</h1>
 
-<h1 align="center">iWork</h1>
+<p align="center">
+  <img src="https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square" alt="License: MIT" />
+  <img src="https://img.shields.io/badge/status-in%20development-orange.svg?style=flat-square" alt="Status: in development" />
+  <img src="https://img.shields.io/badge/Python-3.12-3776AB.svg?style=flat-square&logo=python&logoColor=white" alt="Python 3.12" />
+  <img src="https://img.shields.io/badge/FastAPI-0.115-009688.svg?style=flat-square&logo=fastapi&logoColor=white" alt="FastAPI" />
+  <img src="https://img.shields.io/badge/PostgreSQL-asyncpg-4169E1.svg?style=flat-square&logo=postgresql&logoColor=white" alt="PostgreSQL" />
+  <img src="https://img.shields.io/badge/Node.js-20%2B-339933.svg?style=flat-square&logo=nodedotjs&logoColor=white" alt="Node.js 20+" />
+  <img src="https://img.shields.io/badge/Electron-28-47848F.svg?style=flat-square&logo=electron&logoColor=white" alt="Electron 28" />
+  <img src="https://img.shields.io/badge/React-18-61DAFB.svg?style=flat-square&logo=react&logoColor=white" alt="React 18" />
+  <img src="https://img.shields.io/badge/TypeScript-5-3178C6.svg?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript 5" />
+  <img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=flat-square" alt="PRs welcome" />
+</p>
 
 本工程采取C/S 模式开发，一句话概况「治理集中，执行本地」。需要统一管控的事情留在服务端，需要碰真实资源的事情放到用户机器上。判断标准是资源在哪儿 —— 你的代码、密钥、内网服务都在本地，让一个远端进程去直接读写它们既不安全也没必要；反过来，上下文、token 消耗、模型调用、审计这些需要集中治理的部分，一旦放到各人本地，就等于每个终端一套政策，管不住。
 
@@ -60,8 +72,8 @@ sequenceDiagram
 | 会话与消息 | 1. 多会话隔离，每个会话有独立引擎与消息队列<br>2. 队列满（默认 10）直接拒绝入队，不静默堆积<br>3. 取消、重新生成、续写、事件回放各有独立入口<br>4. 单条消息有等待 → 处理中 → 完成 / 出错 / 已取消的状态流转，会话本身只有活跃与归档 |
 | Query Loop 引擎 | 1. 单条消息最多 25 轮工具调用，总超时 1800 秒<br>2. 输出被长度上限截断时自动追加"继续"重试，最多 3 次，超过才判定为错误<br>3. 单轮读操作并发闸门默认 8 个，避免一轮里几十个读操作同时打库<br>4. Plan 模式下先产出计划，交用户确认、编辑或回答提问后才动手 |
 | 上下文管理 | 1. 估算 token 超过模型窗口比例才触发压缩：构建模式八成、问答模式五成半<br>2. 两级压缩：先压单个块，再让模型合并更早的层<br>3. 模型窗口上限可配，默认 65536<br>4. 超长内容卸载到单独存储，不再占用模型窗口<br>5. 累计 token 用量随事件推给客户端 |
-| 记忆管理 | 1. 四类长期记忆：用户、反馈、项目、参考，由模型自主增删改<br>2. 记忆的读写与检索是模型可直接调用的内置工具<br>3. 卸载出去的内容由召回工具取回，检索用字符 n-gram TF-IDF 加余弦相似度，不依赖向量库 |
-| 内置工具 | 1. 客户端内置工具：bash、文件读写与编辑、文件查找与内容搜索<br>2. 服务端内置工具：记忆读写与检索、派生子 agent<br>3. 读写分类由读工具白名单决定，没列进去的一律按写工具处理<br>4. 客户端内置工具全部经过审批与沙箱 |
+| 记忆管理 | 1. 后台按时机从对话里自动抽取结构化原子记忆（画像 / 事件 / 规则），无需模型自觉写<br>2. 每条新用户消息先做一次相关记忆召回，命中则拼进用户消息前缀，不污染 system 提示词缓存<br>3. 新记忆与已有记忆去重合并，被取代的旧版本软删但保留血缘<br>4. 模型可主动调检索工具兜底，每轮限次<br>5. 检索用字符 n-gram TF-IDF 加余弦相似度，不依赖向量库<br>6. 原子记忆再整合成跨会话的场景叙事（存库，正文为 markdown），默认更新既有场景，合并时须列出被并场景<br>7. 场景导航（名字 / 热度 / 摘要）追加在 system 提示词最末，超预算按热度丢尾<br>8. 场景热度按被整合次数累加，分单火至五火五档；模型要看全文时按名字读取，未命中回可用名单，每轮限次 |
+| 内置工具 | 1. 客户端内置工具：bash、文件读写与编辑、文件查找与内容搜索<br>2. 服务端内置工具：记忆检索、场景按名读取、卸载块召回、派生子 agent<br>3. 读写分类由读工具白名单决定，没列进去的一律按写工具处理<br>4. 客户端内置工具全部经过审批与沙箱 |
 | MCP 工具 | 1. 支持标准输入输出、SSE、可流式 HTTP 三种连接方式<br>2. 清单只做登记，进程由客户端拉起，服务端不派生任何 MCP 进程<br>3. 工具对外命名带上来源标识，避免重名<br>4. 密钥可用占位符从客户端进程环境读取，不必写进配置文件 |
 | Skill | 1. 从预置清单安装与卸载<br>2. 支持自定义 skill 的增删改<br>3. 内置 skill 覆盖文档处理、OCR、邮件、企业微信等场景 |
 | 权限管理 | 1. 三态判定：放行、需要审批、禁止<br>2. 全局开关可选按需询问 / 从不询问 / 细粒度<br>3. 内置只读、工作区、完全放行三档画像，外加危险命令启发式与规则表<br>4. 命令类、规则类、网络类审批可分别开关<br>5. 客户端再兜一层：Windows 写权限沙箱与域名审批弹窗 |
@@ -71,6 +83,35 @@ sequenceDiagram
 | 幂等性设计 | 1. 每次工具调用都记账并带幂等键，重复请求可以拿出来对账<br>2. 客户端有一条本地 outbox，回投失败时幂等重投，避免工具被重复执行<br>3. 回投超时后服务端推对账请求，判断到底执行了没有<br>4. 写类操作结果不明时标记为待确认，请用户判断是否已执行<br>5. 会话的副作用账本可以查询 |
 | 专家与专家团 | 1. 一个专家就是一个带清单文件的目录，可含专属 skill、头像与 agent 定义<br>2. 专家团支持多列并行会话 |
 | 客户端界面 | 1. 逐字打字机渲染，文本 / 推理 / 工具卡分段展示<br>2. 单条消息可以重跑<br>3. 计划编辑侧栏、工具审批卡、网络域名审批弹窗<br>4. 配置中心管 MCP、Skills、记忆与规则、专家与专家团<br>5. 本地工作区选择、任务列表、按任务分桶的排队状态 |
+
+
+## 待办
+
+目标：达到可发布状态。🔴 为发布阻塞项。
+
+### 🔴 阻塞
+
+- **账号与登录** — `users` 表无 `email` / `password_hash` / `role`；`server/api/deps.py` 的 `get_default_user_id` 被 24 处路由以 `Depends(...)` 引用，全部返回同一个种子用户。规格见 `docs/requirements.md` §2.8。
+- **多用户隔离未生效** — Skills / MCP / 记忆 / 任务都有 `user_id` 列，但永远填同一个值，§2.8.3 的隔离表落不了地。
+- **打包后客户端连不上后端** — 服务端地址只由 Vite dev proxy 提供，production build 不含它；`apiBaseUrl` 默认空串且无 UI 可改。
+- **从未打过安装包** — `agent-client/out/` 有、`dist/` 无，只跑过 `dev` / `build`。上一条 bug 因此从未暴露。
+- **Hub 管理端缺失** — 数据源是 `server/skill-hub.json` 等 JSON 文件，改目录 = 手改 + 重启；experts / teams 无 mutation 端点。
+- **管理端点无鉴权** — `/admin/audit`、`/skills/hub` 与 `/mcp/hub` 的增删改全部开放。
+- **MCP 越权** — `server/api/mcp_routes.py:182` 的工具上报端点从请求体读 `user_id`（同文件其余端点都走 `Depends`），可往他人命名空间写。
+- **权限引擎放行外挂工具** — `server/tools/permission.py` 的 `_evaluate_other` 对 MCP / skill / 自定义工具一律放行，绕过审批。
+- **无部署产物与 CI** — 无 Dockerfile / compose、无 `.github/`、无 `pyproject.toml`。
+
+### 非阻塞
+
+- **审计表无限增长** — `audit_retention_days` 已声明未消费。
+- **审计 action 不可枚举** — `server/observability/audit.py` 用 `f"tool.{tool_name}"` 动态拼，统计无法分组。
+- **服务端统计无展示面** — 审计只有裸 API；客户端「我的用量」只有类型声明无渲染。
+- **无端到端测试** — 52 个测试文件全是 in-process，无一启动 HTTP。
+- **记忆模块（L1 + L2）未提交** — `server/memory/`（含 `l2/`）、迁移 015/016/017、11 个测试文件均 untracked。
+
+### v1 不做
+
+OAuth、邮件找回密码（需补管理员重置，否则用户锁死无路可走）、真·审核流（用 draft → publish 两步替代）、按内容类型分域管理、配额计费、跨 agent 写锁。
 
 
 ## 快速开始
