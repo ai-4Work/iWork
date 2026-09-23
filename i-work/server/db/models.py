@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy import (
-    String, Text, Integer, BigInteger, Boolean, DateTime, ForeignKey,
+    String, Text, Integer, BigInteger, SmallInteger, Boolean, DateTime, ForeignKey,
     UniqueConstraint, Index, func, text, true as sa_true,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -39,7 +39,7 @@ class OrmUser(Base):
         String(200), comment="显示名称",
     )
     password_hash: Mapped[Optional[str]] = mapped_column(
-        String(200), comment="bcrypt 哈希；NULL = 不可密码登录（如 default-user 初始态）",
+        String(200), comment="bcrypt 哈希；NULL = 不可密码登录",
     )
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, server_default="active",
@@ -51,6 +51,10 @@ class OrmUser(Base):
     )
     locked_until: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), comment="自动锁定截止时间；NULL = 未锁定",
+    )
+    dept_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger, ForeignKey("sys_dept.id", ondelete="RESTRICT"),
+        comment="所属部门；种子把 NULL 回填成默认部门（doc 19-2.2）",
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(),
@@ -1532,4 +1536,199 @@ class OrmOffloadedBlock(Base):
         Index("idx_offloaded_session", "session_id"),
         Index("idx_offloaded_session_block", "session_id", "block_id"),
         {"comment": "卸载块表：会话上下文压缩时卸载的外部记忆，TF-IDF 召回用"},
+    )
+
+
+# ═══════════════════════════════════════════════════════════════
+# 13b. 组织架构（doc 19-2.2）
+# ═══════════════════════════════════════════════════════════════
+
+class OrmDept(Base):
+    """部门树：用户通过 `users.dept_id` 归属到一个部门（doc 19-2.2）。
+
+    刻意不存 `ancestors` 路径列 —— 当前没有任何「按子树查成员」的需求，
+    要用时再加。`parent_id = 0` 表示顶级。
+    """
+
+    __tablename__ = "sys_dept"
+
+    id: Mapped[int] = mapped_column(
+        BigInteger, primary_key=True, autoincrement=True, comment="部门ID",
+    )
+    parent_id: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default="0", comment="父级ID（0=顶级）",
+    )
+    dept_name: Mapped[str] = mapped_column(
+        String(50), nullable=False, comment="部门名称",
+    )
+    dept_key: Mapped[Optional[str]] = mapped_column(
+        String(50), unique=True,
+        comment="业务键；只有代码要按它认行的字典行才填（默认部门=default），用户建的部门填 NULL",
+    )
+    order_num: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0", comment="排序号",
+    )
+    status: Mapped[int] = mapped_column(
+        SmallInteger, nullable=False, server_default="1", comment="1=正常 0=禁用",
+    )
+
+    __table_args__ = (
+        Index("idx_sys_dept_parent", "parent_id"),
+        {"comment": "部门表：组织架构树；种子保证「默认部门」始终存在"},
+    )
+
+
+# ═══════════════════════════════════════════════════════════════
+# 14. RBAC 权限（doc 19）
+# ═══════════════════════════════════════════════════════════════
+
+class OrmRole(Base):
+    """角色表：一组权限点，外加一条数据范围（doc 19-2.2）。
+
+    角色是「身份/岗位」，用户通过 sys_user_role 挂角色，权限是角色的并集。
+    """
+
+    __tablename__ = "sys_role"
+
+    id: Mapped[int] = mapped_column(
+        BigInteger, primary_key=True, autoincrement=True, comment="角色ID",
+    )
+    role_name: Mapped[str] = mapped_column(
+        String(50), nullable=False, comment="角色名称（如：管理员）",
+    )
+    role_key: Mapped[str] = mapped_column(
+        String(50), nullable=False, unique=True, comment="角色标识（如：admin）",
+    )
+    data_scope: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default="SELF",
+        comment="数据范围 ALL | DEPT | SELF（DEPT = 本部门及下级，doc 19-5.3）",
+    )
+    status: Mapped[int] = mapped_column(
+        SmallInteger, nullable=False, server_default="1",
+        comment="1=正常 0=禁用；禁用后其授权不参与计算（doc 19-5.1）",
+    )
+
+    __table_args__ = (
+        {"comment": "角色表：权限集合 + 数据范围；data_scope 默认 SELF 是陷阱（doc 19-2.2）"},
+    )
+
+
+class OrmPermission(Base):
+    """目录 / 菜单 / 按钮权限树（doc 19-2.2）。
+
+    **只存「有哪些权限点」**，权限点与 API 的绑定单独放 sys_permission_api。
+    `perms` 为 NULL + UNIQUE 而非 DEFAULT ''：目录行本来就没有权限标识，
+    都填空串会在 UNIQUE 下互相冲突、也认不出谁是谁；NULL 之间不冲突。
+    """
+
+    __tablename__ = "sys_permission"
+
+    id: Mapped[int] = mapped_column(
+        BigInteger, primary_key=True, autoincrement=True, comment="权限ID",
+    )
+    parent_id: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default="0", comment="父级ID（0=顶级）",
+    )
+    permission_name: Mapped[str] = mapped_column(
+        String(50), nullable=False, comment="菜单/按钮名称",
+    )
+    permission_type: Mapped[str] = mapped_column(
+        String(1), nullable=False, comment="M=目录 C=菜单 F=按钮",
+    )
+    path: Mapped[str] = mapped_column(
+        String(200), nullable=False, server_default="",
+        comment="前端路由地址（区别于 sys_permission_api.path 的后端接口路径）",
+    )
+    component: Mapped[str] = mapped_column(
+        String(255), nullable=False, server_default="", comment="前端组件路径",
+    )
+    perms: Mapped[Optional[str]] = mapped_column(
+        String(100), unique=True,
+        comment="权限标识（前后端共用）；目录行填 NULL",
+    )
+    icon: Mapped[str] = mapped_column(
+        String(100), nullable=False, server_default="", comment="图标",
+    )
+    order_num: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0", comment="排序号",
+    )
+    visible: Mapped[int] = mapped_column(
+        SmallInteger, nullable=False, server_default="1", comment="1=显示 0=隐藏",
+    )
+    status: Mapped[int] = mapped_column(
+        SmallInteger, nullable=False, server_default="1", comment="1=正常 0=禁用",
+    )
+
+    __table_args__ = (
+        Index("idx_sys_permission_parent", "parent_id"),
+        {"comment": "权限字典表：目录/菜单/按钮；由 catalog.py 启动对账生成，不手写 SQL"},
+    )
+
+
+class OrmUserRole(Base):
+    """用户-角色关联表（doc 19-2.2）。多对多，用户权限是其所有 status=1 角色的并集。"""
+
+    __tablename__ = "sys_user_role"
+
+    user_id: Mapped[_uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        primary_key=True, comment="用户ID",
+    )
+    role_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("sys_role.id", ondelete="CASCADE"),
+        primary_key=True, comment="角色ID",
+    )
+
+    __table_args__ = (
+        Index("idx_sys_user_role_role", "role_id"),
+        {"comment": "用户-角色关联表"},
+    )
+
+
+class OrmRolePermission(Base):
+    """角色-权限关联表（doc 19-2.2）。admin 角色不走此表——它在代码里短路成全集。"""
+
+    __tablename__ = "sys_role_permission"
+
+    role_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("sys_role.id", ondelete="CASCADE"),
+        primary_key=True, comment="角色ID",
+    )
+    permission_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("sys_permission.id", ondelete="CASCADE"),
+        primary_key=True, comment="权限ID",
+    )
+
+    __table_args__ = (
+        {"comment": "角色-权限关联表；由角色权限配置页维护"},
+    )
+
+
+class OrmPermissionApi(Base):
+    """权限点-API 映射表（doc 19-2.6）。
+
+    库里是 `Depends(require_permission(...))` 的镜像，两处必须一致，
+    否则会无声漂移；启动时 verify_route_refs() 负责比对。
+    """
+
+    __tablename__ = "sys_permission_api"
+
+    permission_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("sys_permission.id", ondelete="CASCADE"),
+        primary_key=True, comment="权限ID",
+    )
+    method: Mapped[str] = mapped_column(
+        String(10), primary_key=True, comment="HTTP 方法",
+    )
+    path: Mapped[str] = mapped_column(
+        String(200), primary_key=True, comment="接口路径（如 /api/system/user/{id}）",
+    )
+
+    __table_args__ = (
+        {"comment": "权限点-API 映射表：三列共同主键"},
     )

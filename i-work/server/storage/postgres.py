@@ -4,7 +4,7 @@ import uuid as _uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import select, func, update, delete, text, bindparam
+from sqlalchemy import select, func, update, delete, insert, literal, text, bindparam
 from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession
 
 from server.models.session import Session, SessionStatus
@@ -23,6 +23,7 @@ from server.db.models import (
     OrmUserSkill, OrmUserMcpServer, OrmSkillHub, OrmMcpHub,
     OrmExpertHub, OrmExpertTeamHub, OrmOffloadedBlock, OrmToolInvocation,
     OrmL1Memory, OrmL1Checkpoint, OrmL2Scene, OrmL2Checkpoint, OrmL3Persona,
+    OrmRole, OrmPermission, OrmUserRole, OrmRolePermission, OrmDept,
 )
 
 
@@ -273,24 +274,35 @@ class UserRepo:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]):
         self._sf = session_factory
 
-    async def get_or_create_default(self) -> OrmUser:
-        from server.db.seed import DEFAULT_USER_ID
-        async with self._sf() as db:
-            user = await db.get(OrmUser, DEFAULT_USER_ID)
-            if user:
-                return user
-            user = OrmUser(
-                id=DEFAULT_USER_ID,
-                username="default-user",
-                display_name="默认用户",
-            )
-            db.add(user)
-            await db.commit()
-            return user
-
     async def get_by_id(self, user_id: _uuid.UUID) -> OrmUser | None:
         async with self._sf() as db:
             return await db.get(OrmUser, user_id)
+
+    async def list_visible(
+        self, actor_id: _uuid.UUID, scope: str, dept_ids: list[int] | None = None,
+    ) -> list[OrmUser]:
+        """按调用者的数据范围裁剪（doc 19-5.3）。
+
+        `scope` 一律由 `load_user_scope()` 算出来，**不接受客户端传值** ——
+        前端传个 `ALL` 就绕过了。`dept_ids` 是 `DEPT` 档用的主体部门子树
+        （`authz.service.visible_dept_ids`），由调用方算好传进来。
+
+        三档都是**显式分支**：落到 else 的是「不是 ALL 也不是 DEPT」的一切取值，
+        按最窄处理。**不能**写成 `if scope != "SELF": 不加条件` —— 那是 fail-open，
+        清单外的一个值就等于放开全量。
+
+        这只落了「查用户」四类入口里的**列表**这一类，详情 / 分页 COUNT /
+        导出聚合还没建（doc 19-5.3 的告诫），别照抄这一个方法当落完了。
+        """
+        async with self._sf() as db:
+            stmt = select(OrmUser).order_by(OrmUser.username)
+            if scope == "ALL":
+                pass
+            elif scope == "DEPT":
+                stmt = stmt.where(OrmUser.dept_id.in_(dept_ids or []))
+            else:
+                stmt = stmt.where(OrmUser.id == actor_id)
+            return list((await db.execute(stmt)).scalars())
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1606,3 +1618,316 @@ class ToolInvocationRepo(ToolInvocationRepository):
                 .order_by(OrmToolInvocation.created_at)
             )
             return [r.to_pydantic() for r in result.scalars()]
+
+
+# ═══════════════════════════════════════════════════════════════
+# RBAC（doc 19）
+# ═══════════════════════════════════════════════════════════════
+
+class RoleRepo:
+    """角色表读取与数据范围写入。角色的增删改不在本期范围内（doc 19-4.2 的"待建"）。"""
+
+    def __init__(self, session_factory: async_sessionmaker[AsyncSession]):
+        self._sf = session_factory
+
+    async def list_all(self) -> list[OrmRole]:
+        async with self._sf() as db:
+            result = await db.execute(select(OrmRole).order_by(OrmRole.id))
+            return list(result.scalars())
+
+    async def list_ids(self) -> set[int]:
+        """全部角色 id，供「给用户挂角色」写入时校验入参。"""
+        async with self._sf() as db:
+            result = await db.execute(select(OrmRole.id))
+            return set(result.scalars())
+
+    async def get(self, role_id: int) -> OrmRole | None:
+        async with self._sf() as db:
+            return await db.get(OrmRole, role_id)
+
+    async def get_by_key(self, role_key: str) -> OrmRole | None:
+        async with self._sf() as db:
+            result = await db.execute(select(OrmRole).where(OrmRole.role_key == role_key))
+            return result.scalar_one_or_none()
+
+    async def create(
+        self, role_key: str, role_name: str, data_scope: str, status: int = 1,
+    ) -> OrmRole:
+        async with self._sf() as db:
+            role = OrmRole(
+                role_key=role_key, role_name=role_name,
+                data_scope=data_scope, status=status,
+            )
+            db.add(role)
+            await db.commit()
+            await db.refresh(role)
+            return role
+
+    async def set_data_scope(self, role_id: int, data_scope: str) -> bool:
+        """只改数据范围。`data_scope` 的取值由调用方校验（ALL / DEPT / SELF）。"""
+        async with self._sf() as db:
+            result = await db.execute(
+                update(OrmRole)
+                .where(OrmRole.id == role_id)
+                .values(data_scope=data_scope)
+            )
+            await db.commit()
+            return bool(result.rowcount)
+
+    async def set_role_name(self, role_id: int, role_name: str) -> bool:
+        """只改角色显示名。种子用它把内置角色改名（幂等对账，见 db/seed.py）。"""
+        async with self._sf() as db:
+            result = await db.execute(
+                update(OrmRole)
+                .where(OrmRole.id == role_id)
+                .values(role_name=role_name)
+            )
+            await db.commit()
+            return bool(result.rowcount)
+
+    async def scopes_by_ids(self, role_ids: list[int]) -> dict[int, str]:
+        """一批角色的数据范围，写侧守卫判断「有没有授出比自己宽的角色」用。"""
+        if not role_ids:
+            return {}
+        async with self._sf() as db:
+            result = await db.execute(
+                select(OrmRole.id, OrmRole.data_scope).where(OrmRole.id.in_(role_ids))
+            )
+            return {rid: scope for rid, scope in result.all()}
+
+
+class PermissionRepo:
+    """权限字典表读取。写入只走 `authz.sync_catalog()`，不从这里改。"""
+
+    def __init__(self, session_factory: async_sessionmaker[AsyncSession]):
+        self._sf = session_factory
+
+    async def list_all(self) -> list[OrmPermission]:
+        async with self._sf() as db:
+            result = await db.execute(
+                select(OrmPermission).order_by(
+                    OrmPermission.parent_id, OrmPermission.order_num, OrmPermission.id,
+                )
+            )
+            return list(result.scalars())
+
+    async def list_ids(self) -> set[int]:
+        """全部权限点 id，供授权写入时校验入参。"""
+        async with self._sf() as db:
+            result = await db.execute(select(OrmPermission.id))
+            return set(result.scalars())
+
+
+class RolePermissionRepo:
+    """角色-权限关联。写入是"整集替换"，不是增量添加。"""
+
+    def __init__(self, session_factory: async_sessionmaker[AsyncSession]):
+        self._sf = session_factory
+
+    async def list_permission_ids(self, role_id: int) -> list[int]:
+        async with self._sf() as db:
+            result = await db.execute(
+                select(OrmRolePermission.permission_id)
+                .where(OrmRolePermission.role_id == role_id)
+                .order_by(OrmRolePermission.permission_id)
+            )
+            return list(result.scalars())
+
+    async def replace(self, role_id: int, permission_ids: list[int]) -> int:
+        """先清后插。管理员界面是"勾完保存"，语义是全量覆盖，不是增量（doc 19-3.1）。"""
+        unique = sorted(set(permission_ids))
+        async with self._sf() as db:
+            await db.execute(
+                delete(OrmRolePermission).where(OrmRolePermission.role_id == role_id)
+            )
+            if unique:
+                await db.execute(
+                    insert(OrmRolePermission),
+                    [{"role_id": role_id, "permission_id": pid} for pid in unique],
+                )
+            await db.commit()
+            return len(unique)
+
+
+class UserRoleRepo:
+    """用户-角色关联。注册默认角色、存量回填、管理员挂角色都落在这里。"""
+
+    def __init__(self, session_factory: async_sessionmaker[AsyncSession]):
+        self._sf = session_factory
+
+    async def list_role_ids(self, user_id: _uuid.UUID) -> list[int]:
+        async with self._sf() as db:
+            result = await db.execute(
+                select(OrmUserRole.role_id)
+                .where(OrmUserRole.user_id == user_id)
+                .order_by(OrmUserRole.role_id)
+            )
+            return list(result.scalars())
+
+    async def list_role_ids_by_users(
+        self, user_ids: list[_uuid.UUID],
+    ) -> dict[_uuid.UUID, list[int]]:
+        """一批用户的角色 id，一次查完 —— 用户列表页逐人查就是 N+1。
+
+        没有角色的用户**不出现在结果里**，调用方按 `dict.get(id, [])` 取。
+        """
+        if not user_ids:
+            return {}
+        async with self._sf() as db:
+            result = await db.execute(
+                select(OrmUserRole.user_id, OrmUserRole.role_id)
+                .where(OrmUserRole.user_id.in_(user_ids))
+                .order_by(OrmUserRole.user_id, OrmUserRole.role_id)
+            )
+        grouped: dict[_uuid.UUID, list[int]] = {}
+        for user_id, role_id in result.all():
+            grouped.setdefault(user_id, []).append(role_id)
+        return grouped
+
+    async def replace(self, user_id: _uuid.UUID, role_ids: list[int]) -> int:
+        """先清后插。管理界面是"勾完保存"，语义是全量覆盖，不是增量（同 RolePermissionRepo）。"""
+        unique = sorted(set(role_ids))
+        async with self._sf() as db:
+            await db.execute(delete(OrmUserRole).where(OrmUserRole.user_id == user_id))
+            if unique:
+                await db.execute(
+                    insert(OrmUserRole),
+                    [{"user_id": user_id, "role_id": rid} for rid in unique],
+                )
+            await db.commit()
+            return len(unique)
+
+    async def assign(self, user_id: _uuid.UUID, role_id: int) -> None:
+        """幂等挂一个角色。"""
+        async with self._sf() as db:
+            exists = (await db.execute(
+                select(OrmUserRole.user_id).where(
+                    OrmUserRole.user_id == user_id,
+                    OrmUserRole.role_id == role_id,
+                )
+            )).scalar_one_or_none()
+            if exists is not None:
+                return
+            db.add(OrmUserRole(user_id=user_id, role_id=role_id))
+            await db.commit()
+
+    async def assign_default_to_roleless(self, role_id: int) -> int:
+        """给一个角色都没有的用户补上默认角色，返回补了多少行。
+
+        存量回填用：认证上线前的账号没有角色，RBAC 一生效它们的 permissions 就是空的，
+        侧边栏一个入口都不显示。
+        """
+        async with self._sf() as db:
+            has_any_role = (
+                select(OrmUserRole.user_id)
+                .where(OrmUserRole.user_id == OrmUser.id)
+                .exists()
+            )
+            stmt = insert(OrmUserRole).from_select(
+                ["user_id", "role_id"],
+                select(OrmUser.id, literal(role_id)).where(~has_any_role),
+            )
+            result = await db.execute(stmt)
+            await db.commit()
+            return int(result.rowcount or 0)
+
+
+class DeptRepo:
+    """部门树读写（doc 19-2.2）。
+
+    不提供「查子树」的方法 —— `data_scope` 的 DEPT 档还没接线，没有调用方。
+    """
+
+    def __init__(self, session_factory: async_sessionmaker[AsyncSession]):
+        self._sf = session_factory
+
+    async def list_all(self) -> list[OrmDept]:
+        async with self._sf() as db:
+            result = await db.execute(
+                select(OrmDept).order_by(
+                    OrmDept.parent_id, OrmDept.order_num, OrmDept.id,
+                )
+            )
+            return list(result.scalars())
+
+    async def get(self, dept_id: int) -> OrmDept | None:
+        async with self._sf() as db:
+            return await db.get(OrmDept, dept_id)
+
+    async def get_by_key(self, dept_key: str) -> OrmDept | None:
+        async with self._sf() as db:
+            result = await db.execute(
+                select(OrmDept).where(OrmDept.dept_key == dept_key)
+            )
+            return result.scalar_one_or_none()
+
+    async def create(
+        self, parent_id: int, dept_name: str, order_num: int = 0,
+        dept_key: str | None = None,
+    ) -> OrmDept:
+        async with self._sf() as db:
+            dept = OrmDept(
+                parent_id=parent_id, dept_name=dept_name,
+                order_num=order_num, dept_key=dept_key,
+            )
+            db.add(dept)
+            await db.commit()
+            await db.refresh(dept)
+            return dept
+
+    async def update(
+        self, dept_id: int, dept_name: str, parent_id: int, order_num: int,
+    ) -> bool:
+        async with self._sf() as db:
+            result = await db.execute(
+                update(OrmDept)
+                .where(OrmDept.id == dept_id)
+                .values(dept_name=dept_name, parent_id=parent_id, order_num=order_num)
+            )
+            await db.commit()
+            return bool(result.rowcount)
+
+    async def delete(self, dept_id: int) -> bool:
+        async with self._sf() as db:
+            result = await db.execute(delete(OrmDept).where(OrmDept.id == dept_id))
+            await db.commit()
+            return bool(result.rowcount)
+
+    async def count_children(self, dept_id: int) -> int:
+        async with self._sf() as db:
+            result = await db.execute(
+                select(func.count()).select_from(OrmDept)
+                .where(OrmDept.parent_id == dept_id)
+            )
+            return int(result.scalar() or 0)
+
+    async def count_members(self, dept_id: int) -> int:
+        async with self._sf() as db:
+            result = await db.execute(
+                select(func.count()).select_from(OrmUser)
+                .where(OrmUser.dept_id == dept_id)
+            )
+            return int(result.scalar() or 0)
+
+    async def set_user_dept(self, user_id: _uuid.UUID, dept_id: int) -> bool:
+        async with self._sf() as db:
+            result = await db.execute(
+                update(OrmUser).where(OrmUser.id == user_id).values(dept_id=dept_id)
+            )
+            await db.commit()
+            return bool(result.rowcount)
+
+    async def backfill_null_dept(self, default_dept_id: int) -> int:
+        """把还没有归属的用户全部指到默认部门，返回补了多少行。
+
+        每次启动都跑：服务连跑一周时，这一周注册的人不能一直挂着 NULL
+        （注册路径也会直接挂，这里是兜底）。
+        """
+        async with self._sf() as db:
+            result = await db.execute(
+                update(OrmUser)
+                .where(OrmUser.dept_id.is_(None))
+                .values(dept_id=default_dept_id)
+            )
+            await db.commit()
+            return int(result.rowcount or 0)

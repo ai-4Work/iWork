@@ -22,7 +22,7 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, Request, Depends
 
 from server.models.message import MCPInstallRequest, MCPCustomCreate
-from server.api.deps import get_current_user, get_db
+from server.api.deps import get_current_user, get_db, require_permission
 from server.storage.postgres import McpHubRepo, UserMcpRepo
 from server.observability.audit import audit_log
 
@@ -44,7 +44,16 @@ def _get_user_mcp_repo(request: Request) -> UserMcpRepo:
 # ═══════════════════════════════════════════════════════════════
 
 @router_mcp.get("/hub")
-async def list_hub(request: Request):
+async def list_hub(
+    request: Request,
+    _: None = Depends(require_permission("system:mcp:list", "client:mcp:config")),
+):
+    """浏览 Hub。
+
+    两个权限点任一即可：`system:mcp:list` 是将来后台管理页的入口，而客户端
+    "MCP 配置"页也要列 Hub 才能装东西，那条入口对应 `client:mcp:config`
+    （普通用户只有后者，只挂前者会把客户端功能一起关掉）。
+    """
     hub = _get_hub_repo(request)
     return {"servers": await hub.list_all()}
 
@@ -54,7 +63,10 @@ async def list_hub(request: Request):
 # ═══════════════════════════════════════════════════════════════
 
 @router_mcp.post("/hub", status_code=201)
-async def add_hub(body: dict, request: Request):
+async def add_hub(
+    body: dict, request: Request,
+    _: None = Depends(require_permission("system:mcp:add")),
+):
     hub = _get_hub_repo(request)
     result = await hub.create(body)
     return result
@@ -65,7 +77,10 @@ async def add_hub(body: dict, request: Request):
 # ═══════════════════════════════════════════════════════════════
 
 @router_mcp.put("/hub/{server_id}")
-async def update_hub(server_id: str, body: dict, request: Request):
+async def update_hub(
+    server_id: str, body: dict, request: Request,
+    _: None = Depends(require_permission("system:mcp:edit")),
+):
     hub = _get_hub_repo(request)
     existing = await hub.get_by_id(server_id)
     if existing is None:
@@ -79,7 +94,10 @@ async def update_hub(server_id: str, body: dict, request: Request):
 # ═══════════════════════════════════════════════════════════════
 
 @router_mcp.delete("/hub/{server_id}")
-async def delete_hub(server_id: str, request: Request):
+async def delete_hub(
+    server_id: str, request: Request,
+    _: None = Depends(require_permission("system:mcp:remove")),
+):
     hub = _get_hub_repo(request)
     ok = await hub.delete(server_id)
     if not ok:

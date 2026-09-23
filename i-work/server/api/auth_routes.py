@@ -9,17 +9,14 @@ from __future__ import annotations
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from server.api.deps import get_auth_service, get_current_user
+from server.api.deps import get_auth_service, get_current_user, get_db
 from server.auth.service import AuthError, AuthService, serialize_user
+from server.authz.service import load_user_permissions
 
 router_auth = APIRouter(prefix="/auth", tags=["auth"])
-
-
-class RegisterRequest(BaseModel):
-    username: str = Field(..., description="3–32 位小写字母/数字/下划线/短横线")
-    password: str
 
 
 class LoginRequest(BaseModel):
@@ -48,22 +45,6 @@ def _fail(exc: AuthError):
 
 def _client_ip(request: Request) -> str | None:
     return request.client.host if request.client else None
-
-
-@router_auth.post("/register", status_code=201)
-async def register(
-    body: RegisterRequest,
-    service: AuthService = Depends(get_auth_service),
-):
-    """开放注册，只需 username + password。
-
-    不返回 token —— 注册完还要显式登录一次，省掉"注册即登录"这条隐式路径。
-    """
-    try:
-        user = await service.register(body.username, body.password)
-    except AuthError as exc:
-        _fail(exc)
-    return {"user": serialize_user(user)}
 
 
 @router_auth.post("/login")
@@ -119,13 +100,26 @@ async def logout_all(
 async def me(
     user_id: UUID = Depends(get_current_user),
     service: AuthService = Depends(get_auth_service),
+    db: AsyncSession = Depends(get_db),
 ):
-    """查库，不用 token 里的旧快照。"""
+    """查库，不用 token 里的旧快照。
+
+    顺带下发 `permissions`（doc 19-5.4）：客户端 `authStore` 已经在调本接口取用户，
+    权限搭这个响应回去最省事。
+
+    **只下发权限点，不下发菜单树或入口清单** —— 前端自己持有 `perms → 组件` 映射，
+    下发的数组只用来查那张表（doc 19-6.4）。权限也不塞进 token：被改后要等 token
+    过期才生效，而扩在这里是每次开客户端就重新拉。
+    """
     try:
         user = await service.get_user(user_id)
     except AuthError as exc:
         _fail(exc)
-    return {"user": serialize_user(user)}
+    permissions = await load_user_permissions(db, user_id)
+    return {
+        "user": serialize_user(user),
+        "permissions": sorted(permissions),
+    }
 
 
 @router_auth.post("/change-password")

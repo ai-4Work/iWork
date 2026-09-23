@@ -7,18 +7,12 @@ import { SkillsConfig } from '../config/SkillsConfig'
 import { McpConfig } from '../config/McpConfig'
 import { MemoryConfig } from '../config/MemoryConfig'
 import { ExpertConfig } from '../config/ExpertConfig'
+import { RbacConfig } from '../config/RbacConfig'
+import { DeptConfig } from '../config/DeptConfig'
+import { CONFIG_TITLES, type ConfigPage } from '../config/pages'
 import { useChatStore } from '../../stores/chatStore'
 import { useTaskStore } from '../../stores/taskStore'
 import { useMultiAgentStore } from '../../stores/multiAgentStore'
-
-type ConfigPage = 'skills' | 'mcp' | 'memory' | 'expert'
-
-const CONFIG_TITLES: Record<ConfigPage, string> = {
-  skills: 'Skills 配置',
-  mcp: 'MCP 配置',
-  memory: '记忆配置',
-  expert: '专家和专家团'
-}
 
 export function AppLayout() {
   const [configPage, setConfigPage] = useState<ConfigPage | null>(null)
@@ -74,6 +68,8 @@ export function AppLayout() {
               {configPage === 'mcp' && <McpConfig />}
               {configPage === 'memory' && <MemoryConfig />}
               {configPage === 'expert' && <ExpertConfig onClose={() => setConfigPage(null)} />}
+              {configPage === 'rbac' && <RbacConfig />}
+              {configPage === 'dept' && <DeptConfig />}
             </div>
           </div>
         )}

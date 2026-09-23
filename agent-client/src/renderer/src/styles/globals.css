@@ -94,6 +94,9 @@ body {
   to { opacity: 1; transform: translateY(0); }
 }
 
+/* Toast */
+#toast.show { opacity: 1; }
+
 /* Context Menu */
 .ctx-menu.show { display: block; }
 .ctx-menu-item {

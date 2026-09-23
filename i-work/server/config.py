@@ -175,6 +175,14 @@ class Settings(BaseSettings):
     # 轮换宽限期（秒）：旧 refresh token 吊销后这段时间内仍接受。
     # 客户端刷新响应丢失后会带旧 token 重试，直接判重放会把人误踢下线
     auth_refresh_grace_seconds: int = 30
+    # ── RBAC bootstrap 管理员（docs/chapters/19-权限管理RBAC.md §5.5） ──
+    # 首个管理员账号名。挂 admin 角色（短路成全集），不是"谁先注册谁当管理员"
+    # 使用: server/db/seed.py（seed_rbac）
+    bootstrap_admin_username: str = "admin"
+    # 首个管理员密码。**仅在 admin 账号尚不存在时必填**，为空则拒绝启动
+    # （已有 admin 时留空不报错，免得重启被卡住）
+    # 使用: server/db/seed.py（seed_rbac）
+    bootstrap_admin_password: str = ""
 
     # ── 数据库 ──
     # 异步 SQLAlchemy 连接串（asyncpg 驱动），必填，由 IWORK_DATABASE_URL 提供

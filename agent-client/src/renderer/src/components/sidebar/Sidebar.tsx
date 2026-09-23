@@ -1,15 +1,25 @@
+import { Fragment } from 'react'
 import { useTaskStore } from '../../stores/taskStore'
 import { useChatStore } from '../../stores/chatStore'
 import { activateTask } from '../../stores/persistence'
-import { useAuthStore } from '../../stores/authStore'
+import { useAuthStore, hasPermi } from '../../stores/authStore'
+import { ENTRY_VIEWS, CONFIG_TITLES, type ConfigPage } from '../config/pages'
 import { Plus } from 'lucide-react'
-
-type ConfigPage = 'skills' | 'mcp' | 'memory' | 'expert'
 
 interface Props {
   onOpenConfig: (page: ConfigPage) => void
   onCloseConfig: () => void
   activeConfig: ConfigPage | null
+}
+
+/** 入口图标。与 `ENTRY_VIEWS` 的 page 一一对应 —— 加页面时两处都要动。 */
+const ENTRY_ICONS: Record<ConfigPage, React.ReactNode> = {
+  skills: <svg className="w-4 h-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="1.5" y="1.5" width="5" height="5" rx="1" /><rect x="9.5" y="1.5" width="5" height="5" rx="1" /><rect x="1.5" y="9.5" width="5" height="5" rx="1" /><rect x="9.5" y="9.5" width="5" height="5" rx="1" /></svg>,
+  mcp: <svg className="w-4 h-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="5" cy="5" r="2" /><circle cx="11" cy="11" r="2" /><line x1="6.3" y1="6.3" x2="9.7" y2="9.7" /><line x1="5" y1="13" x2="5" y2="7" /><line x1="11" y1="9" x2="11" y2="3" /></svg>,
+  memory: <svg className="w-4 h-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="8" cy="8" r="6" /><path d="M8 6v3M8 11v.01" /></svg>,
+  expert: <svg className="w-4 h-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="6" cy="5" r="2" /><circle cx="11" cy="6" r="2" /><circle cx="4" cy="11" r="2" /><circle cx="10" cy="11" r="2" /></svg>,
+  rbac: <svg className="w-4 h-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="7" width="10" height="7" rx="1.5" /><path d="M5.5 7V5a2.5 2.5 0 015 0v2" /></svg>,
+  dept: <svg className="w-4 h-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="6" y="1.5" width="4" height="4" rx="1" /><rect x="1.5" y="10.5" width="4" height="4" rx="1" /><rect x="10.5" y="10.5" width="4" height="4" rx="1" /><path d="M8 5.5v2.5M3.5 10.5V8h9v2.5" /></svg>
 }
 
 export function Sidebar({ onOpenConfig, onCloseConfig, activeConfig }: Props) {
@@ -23,6 +33,9 @@ export function Sidebar({ onOpenConfig, onCloseConfig, activeConfig }: Props) {
   const rename = useTaskStore((s) => s.rename)
   const duplicate = useTaskStore((s) => s.duplicate)
   const processingTaskIds = useChatStore((s) => s.processingTaskIds)
+  const permissions = useAuthStore((s) => s.permissions)
+  // 分组顺序按表里首次出现定，不假设同 section 必须连成一段
+  const sections = [...new Set(ENTRY_VIEWS.map((e) => e.section))]
 
   return (
     <aside className="w-[252px] min-w-[252px] bg-sidebar-bg text-sidebar-text flex flex-col p-5 gap-0.5 border-r border-sidebar-border h-full">
@@ -46,36 +59,31 @@ export function Sidebar({ onOpenConfig, onCloseConfig, activeConfig }: Props) {
         新建任务
       </button>
 
-      {/* Config Nav */}
-      <div className="text-[10px] font-semibold uppercase tracking-[0.6px] text-sidebar-text-dim pt-4 pb-1 px-2.5">
-        配置
-      </div>
-      <SidebarBtn
-        icon={<svg className="w-4 h-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="1.5" y="1.5" width="5" height="5" rx="1" /><rect x="9.5" y="1.5" width="5" height="5" rx="1" /><rect x="1.5" y="9.5" width="5" height="5" rx="1" /><rect x="9.5" y="9.5" width="5" height="5" rx="1" /></svg>}
-        label="Skills 配置"
-        active={activeConfig === 'skills'}
-        onClick={() => onOpenConfig('skills')}
-      />
-      <SidebarBtn
-        icon={<svg className="w-4 h-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="5" cy="5" r="2" /><circle cx="11" cy="11" r="2" /><line x1="6.3" y1="6.3" x2="9.7" y2="9.7" /><line x1="5" y1="13" x2="5" y2="7" /><line x1="11" y1="9" x2="11" y2="3" /></svg>}
-        label="MCP 配置"
-        active={activeConfig === 'mcp'}
-        onClick={() => onOpenConfig('mcp')}
-      />
-      <SidebarBtn
-        icon={<svg className="w-4 h-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="8" cy="8" r="6" /><path d="M8 6v3M8 11v.01" /></svg>}
-        label="记忆配置"
-        active={activeConfig === 'memory'}
-        onClick={() => onOpenConfig('memory')}
-      />
+      {/* Config Nav —— 按 section 分组；一组里一条权限都没有，整组连标题一起不渲染 */}
+      {sections.map((title) => {
+        const entries = ENTRY_VIEWS.filter(
+          (e) => e.section === title && hasPermi(permissions, e.perms)
+        )
+        if (entries.length === 0) return null
+        return (
+          <Fragment key={title}>
+            <div className="text-[10px] font-semibold uppercase tracking-[0.6px] text-sidebar-text-dim pt-4 pb-1 px-2.5">
+              {title}
+            </div>
+            {entries.map((entry) => (
+              <SidebarBtn
+                key={entry.page}
+                icon={ENTRY_ICONS[entry.page]}
+                label={CONFIG_TITLES[entry.page]}
+                active={activeConfig === entry.page}
+                onClick={() => onOpenConfig(entry.page)}
+              />
+            ))}
+          </Fragment>
+        )
+      })}
 
-      {/* Placeholder buttons */}
-      <SidebarBtn
-        icon={<svg className="w-4 h-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="6" cy="5" r="2" /><circle cx="11" cy="6" r="2" /><circle cx="4" cy="11" r="2" /><circle cx="10" cy="11" r="2" /></svg>}
-        label="专家和专家团"
-        active={activeConfig === 'expert'}
-        onClick={() => onOpenConfig('expert')}
-      />
+      {/* 占位：还没有后端能力，也还没有对应的权限点，先给所有人显示 */}
       <SidebarBtn
         icon={<svg className="w-4 h-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="8" cy="8" r="2" /><path d="M2 8a6 6 0 0112 0" /><path d="M5 3a6 6 0 015 10" /></svg>}
         label="自动化"

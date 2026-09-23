@@ -16,8 +16,10 @@ import zipfile
 from pathlib import Path
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
+
+from server.api.deps import get_current_user
 
 logger = logging.getLogger("iwork.api.agents")
 
@@ -37,7 +39,10 @@ def _get_team_repo(request: Request):
 # ═══════════════════════════════════════════════════════════════
 
 @router_agents.get("/experts")
-async def list_experts(request: Request):
+async def list_experts(
+    request: Request,
+    _: UUID = Depends(get_current_user),
+):
     """获取所有可用专家的元数据（不含 system_prompt）。"""
     repo = _get_expert_repo(request)
     if repo is None:
@@ -69,7 +74,10 @@ async def list_experts(request: Request):
 # ═══════════════════════════════════════════════════════════════
 
 @router_agents.get("/experts/{expert_id}/download")
-async def download_expert(expert_id: UUID, request: Request):
+async def download_expert(
+    expert_id: UUID, request: Request,
+    _: UUID = Depends(get_current_user),
+):
     """下载专家插件包为 zip 文件。"""
     logger.info("download_expert  request  expert_id=%s", expert_id)
 
@@ -134,7 +142,10 @@ async def download_expert(expert_id: UUID, request: Request):
 # ═══════════════════════════════════════════════════════════════
 
 @router_agents.get("/teams/{team_id}/download")
-async def download_team(team_id: UUID, request: Request):
+async def download_team(
+    team_id: UUID, request: Request,
+    _: UUID = Depends(get_current_user),
+):
     """下载团队插件包为 zip 文件。"""
     logger.info("download_team  request  team_id=%s", team_id)
 
@@ -201,7 +212,10 @@ async def download_team(team_id: UUID, request: Request):
 # ═══════════════════════════════════════════════════════════════
 
 @router_agents.get("/teams")
-async def list_teams(request: Request):
+async def list_teams(
+    request: Request,
+    _: UUID = Depends(get_current_user),
+):
     """获取所有可用团队（含成员详情）。"""
     repo = _get_team_repo(request)
     if repo is None:

@@ -39,7 +39,11 @@ from server.models.session import (
     Session, SessionCreate, SessionUpdate, SessionStatus,
     SessionListItem, SessionDetail, AgentConfig,
 )
-from server.api.deps import get_db, get_engine_manager, get_current_user
+from server.api.deps import (
+    get_db, get_engine_manager, get_current_user,
+    require_permission, require_session_access,
+)
+from server.authz.service import load_user_scope
 from server.engine.query_loop import QueueFullError
 from server.observability.audit import audit_log
 
@@ -260,6 +264,7 @@ async def create_session(
 async def get_session(
     session_id: UUID,
     engine_mgr=Depends(get_engine_manager),
+    _: None = Depends(require_session_access),
 ):
     session = await engine_mgr.session_repo.get(session_id)
     if session is None:
@@ -304,6 +309,7 @@ async def update_session(
     session_id: UUID,
     body: SessionUpdate,
     engine_mgr=Depends(get_engine_manager),
+    _: None = Depends(require_session_access),
 ):
     session = await engine_mgr.session_repo.get(session_id)
     if session is None:
@@ -342,6 +348,7 @@ async def update_session(
 async def delete_session(
     session_id: UUID,
     engine_mgr=Depends(get_engine_manager),
+    _: None = Depends(require_session_access),
 ):
     session = await engine_mgr.session_repo.get(session_id)
     if session is None:
@@ -377,6 +384,7 @@ async def send_message(
     engine_mgr=Depends(get_engine_manager),
     user_id: UUID = Depends(get_current_user),
     db=Depends(get_db),
+    _: None = Depends(require_session_access),
 ):
     logger.info("send_message  session=%s  content=%.200s  mode=%s  model=%s  scene=%s  workspace=%s  agent=%s/%s",
         str(session_id), body.content, body.mode, body.model,
@@ -483,6 +491,7 @@ async def reconnect_stream(
     since_seq: int = 0,
     since_message_id: UUID | None = None,
     engine_mgr=Depends(get_engine_manager),
+    _: None = Depends(require_session_access),
 ):
     engine = engine_mgr.get(session_id)
     if engine is None:
@@ -525,6 +534,7 @@ async def session_messages(
     session_id: UUID,
     engine_mgr=Depends(get_engine_manager),
     db=Depends(get_db),
+    _: None = Depends(require_session_access),
 ):
     session = await engine_mgr.session_repo.get(session_id)
     if session is None:
@@ -579,6 +589,7 @@ async def session_messages(
 async def session_agents(
     session_id: UUID,
     engine_mgr=Depends(get_engine_manager),
+    _: None = Depends(require_session_access),
 ):
     """该会话树下已派发过的成员子会话（§9.11.4）——子列历史回读的入口。
 
@@ -610,6 +621,7 @@ async def session_state(
     session_id: UUID,
     engine_mgr=Depends(get_engine_manager),
     db=Depends(get_db),
+    _: None = Depends(require_session_access),
 ):
     from server.db.models import OrmMessage
     engine = engine_mgr.get(session_id)
@@ -647,6 +659,7 @@ async def session_effects(
     session_id: UUID,
     message_id: UUID | None = None,
     db=Depends(get_db),
+    _: None = Depends(require_session_access),
 ):
     """D 工具动作账本：全会话（或单消息）受账工具动作清单（四态 + 读/写标注）。
 
@@ -700,7 +713,11 @@ def _effect_orm_to_dict(orm) -> dict:
 # ═══════════════════════════════════════════════════════════════
 
 @router.get("/queue")
-async def get_queue(session_id: UUID, engine_mgr=Depends(get_engine_manager)):
+async def get_queue(
+    session_id: UUID,
+    engine_mgr=Depends(get_engine_manager),
+    _: None = Depends(require_session_access),
+):
     engine = engine_mgr.get(session_id)
     if engine is None:
         raise HTTPException(404, "无活跃引擎")
@@ -733,6 +750,7 @@ async def get_queue(session_id: UUID, engine_mgr=Depends(get_engine_manager)):
 @router.delete("/queue/{msg_id}")
 async def remove_from_queue(
     session_id: UUID, msg_id: UUID, engine_mgr=Depends(get_engine_manager),
+    _: None = Depends(require_session_access),
 ):
     engine = engine_mgr.get(session_id)
     if engine is None:
@@ -748,7 +766,11 @@ async def remove_from_queue(
 # ═══════════════════════════════════════════════════════════════
 
 @router.post("/plan/confirm")
-async def plan_confirm(session_id: UUID, engine_mgr=Depends(get_engine_manager)):
+async def plan_confirm(
+    session_id: UUID,
+    engine_mgr=Depends(get_engine_manager),
+    _: None = Depends(require_session_access),
+):
     engine = engine_mgr.get(session_id)
     if engine is None:
         raise HTTPException(404, "无活跃引擎")
@@ -757,7 +779,10 @@ async def plan_confirm(session_id: UUID, engine_mgr=Depends(get_engine_manager))
 
 
 @router.post("/plan/edit")
-async def plan_edit(session_id: UUID, body: dict, engine_mgr=Depends(get_engine_manager)):
+async def plan_edit(
+    session_id: UUID, body: dict, engine_mgr=Depends(get_engine_manager),
+    _: None = Depends(require_session_access),
+):
     engine = engine_mgr.get(session_id)
     if engine is None:
         raise HTTPException(404, "无活跃引擎")
@@ -769,7 +794,11 @@ async def plan_edit(session_id: UUID, body: dict, engine_mgr=Depends(get_engine_
 
 
 @router.post("/cancel")
-async def session_cancel(session_id: UUID, engine_mgr=Depends(get_engine_manager)):
+async def session_cancel(
+    session_id: UUID,
+    engine_mgr=Depends(get_engine_manager),
+    _: None = Depends(require_session_access),
+):
     engine = engine_mgr.get(session_id)
     if engine is None:
         raise HTTPException(404, "无活跃引擎")
@@ -784,7 +813,12 @@ async def session_cancel(session_id: UUID, engine_mgr=Depends(get_engine_manager
 
 
 @router.post("/plan/answer")
-async def plan_answer(session_id: UUID, body: dict, engine_mgr=Depends(get_engine_manager)):
+async def plan_answer(
+    session_id: UUID,
+    body: dict,
+    engine_mgr=Depends(get_engine_manager),
+    _: None = Depends(require_session_access),
+):
     engine = engine_mgr.get(session_id)
     if engine is None:
         raise HTTPException(404, "无活跃引擎")
@@ -800,6 +834,7 @@ async def plan_answer(session_id: UUID, body: dict, engine_mgr=Depends(get_engin
 async def tool_result(
     session_id: UUID, request_id: str, body: dict,
     engine_mgr=Depends(get_engine_manager),
+    _: None = Depends(require_session_access),
 ):
     engine = engine_mgr.get(session_id)
     if engine is None:
@@ -854,6 +889,7 @@ async def _reprocess_stream(engine, message_id: UUID, mode: str, body: dict):
 async def regenerate_message(
     session_id: UUID, message_id: UUID, body: dict = None,
     engine_mgr=Depends(get_engine_manager),
+    _: None = Depends(require_session_access),
 ):
     engine = await _get_engine(session_id, engine_mgr)
     return await _reprocess_stream(engine, message_id, "regenerate", body or {})
@@ -863,6 +899,7 @@ async def regenerate_message(
 async def continue_message(
     session_id: UUID, message_id: UUID, body: dict = None,
     engine_mgr=Depends(get_engine_manager),
+    _: None = Depends(require_session_access),
 ):
     engine = await _get_engine(session_id, engine_mgr)
     return await _reprocess_stream(engine, message_id, "continue", body or {})
@@ -1193,6 +1230,7 @@ async def replay_session(
     message_id: UUID | None = Query(None, description="按消息 ID 过滤"),
     since_seq: int | None = Query(None, description="从指定 seq 开始回放"),
     db=Depends(get_db),
+    _: None = Depends(require_session_access),
 ):
     """会话回放：按 seq 顺序返回 NDJSON 流，格式与实时流一致。"""
     from server.db.models import OrmStreamEvent
@@ -1227,10 +1265,20 @@ async def list_audit_logs(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
     db=Depends(get_db),
+    caller_id: UUID = Depends(get_current_user),
+    _: None = Depends(require_permission("system:audit:list")),
 ):
-    """管理员审计查询：分页查询审计日志。"""
+    """管理员审计查询：分页查询审计日志。
+
+    审计按 doc 19-5.3 归入 admin 专属：`user_id` 以前是客户端随便传的查询参数，
+    数据范围不是 `ALL` 的调用者一律**强制覆盖成自己** —— 只拦"能不能调"不够，
+    还得拦"能看谁的"。
+    """
     from server.db.models import OrmAuditLog
     from datetime import datetime
+
+    if await load_user_scope(db, caller_id) != "ALL":
+        user_id = caller_id
 
     stmt = OrmAuditLog.__table__.select()
     if user_id:

@@ -1402,3 +1402,206 @@ export async function fetchTeams(): Promise<{ teams: Team[] }> {
   if (!response.ok) throw new Error(`Teams fetch error: ${response.status}`)
   return response.json()
 }
+
+// ===== RBAC 角色权限配置（docs/chapters/19-权限管理RBAC.md §4.2）=====
+
+export interface RbacRole {
+  id: number
+  role_name: string
+  role_key: string
+  data_scope: string
+  status: number
+}
+
+export interface RbacPermission {
+  id: number
+  parent_id: number
+  permission_name: string
+  permission_type: 'M' | 'C' | 'F'
+  perms: string | null
+  order_num: number
+}
+
+/** 服务端错误体统一 {"detail": {"error","message"}}，这里把 message 提出来当异常文案。 */
+async function rbacError(response: Response, fallback: string): Promise<Error> {
+  try {
+    const body = await response.json()
+    const detail = body?.detail
+    if (detail && typeof detail === 'object' && detail.message) return new Error(detail.message)
+    if (typeof detail === 'string') return new Error(detail)
+  } catch {
+    /* 响应体不是 JSON，用兜底文案 */
+  }
+  return new Error(`${fallback}（${response.status}）`)
+}
+
+// GET /system/role/list
+export async function fetchRoles(): Promise<{ roles: RbacRole[] }> {
+  const response = await authedFetch(getApiUrl('/system/role/list'), { headers: getAuthHeaders() })
+  if (!response.ok) throw await rbacError(response, '角色列表读取失败')
+  return response.json()
+}
+
+// GET /system/permission/list
+export async function fetchPermissions(): Promise<{ permissions: RbacPermission[] }> {
+  const response = await authedFetch(getApiUrl('/system/permission/list'), { headers: getAuthHeaders() })
+  if (!response.ok) throw await rbacError(response, '权限点读取失败')
+  return response.json()
+}
+
+// GET /system/role/{role_id}/permissions
+export async function fetchRolePermissions(
+  roleId: number
+): Promise<{ role_id: number; permission_ids: number[] }> {
+  const response = await authedFetch(getApiUrl(`/system/role/${roleId}/permissions`), {
+    headers: getAuthHeaders()
+  })
+  if (!response.ok) throw await rbacError(response, '角色授权读取失败')
+  return response.json()
+}
+
+// PUT /system/role/{role_id}/permissions — 整集替换
+export async function grantRolePermissions(
+  roleId: number,
+  permissionIds: number[]
+): Promise<{ updated: boolean; count: number }> {
+  const response = await authedFetch(getApiUrl(`/system/role/${roleId}/permissions`), {
+    method: 'PUT',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ permission_ids: permissionIds })
+  })
+  if (!response.ok) throw await rbacError(response, '保存授权失败')
+  return response.json()
+}
+
+// PUT /system/role/{role_id} — 数据范围 ALL（全部）/ DEPT（本部门及下级）/ SELF（仅本人）
+export async function setRoleDataScope(
+  roleId: number,
+  dataScope: string
+): Promise<{ updated: boolean }> {
+  const response = await authedFetch(getApiUrl(`/system/role/${roleId}`), {
+    method: 'PUT',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ data_scope: dataScope })
+  })
+  if (!response.ok) throw await rbacError(response, '数据范围保存失败')
+  return response.json()
+}
+
+// ===== 部门与用户归属（docs/chapters/19-权限管理RBAC.md §2.2）=====
+
+export interface DeptNode {
+  id: number
+  parent_id: number
+  dept_name: string
+  /** 只有默认部门（`default`）有值；用户建的部门是 null */
+  dept_key: string | null
+  order_num: number
+  status: number
+}
+
+export interface DeptUser {
+  id: string
+  username: string
+  display_name: string | null
+  /** null = 未分配；正常运行时种子会把所有人回填成默认部门 */
+  dept_id: number | null
+  status: string
+  /** 角色 id；名字拿 `fetchRoles()` 对。正常不会为空（服务端拒空集） */
+  role_ids: number[]
+}
+
+// GET /system/dept/list
+export async function fetchDepts(): Promise<{ depts: DeptNode[] }> {
+  const response = await authedFetch(getApiUrl('/system/dept/list'), { headers: getAuthHeaders() })
+  if (!response.ok) throw await rbacError(response, '部门列表读取失败')
+  return response.json()
+}
+
+// GET /system/user/list
+export async function fetchUsers(): Promise<{ users: DeptUser[] }> {
+  const response = await authedFetch(getApiUrl('/system/user/list'), { headers: getAuthHeaders() })
+  if (!response.ok) throw await rbacError(response, '用户列表读取失败')
+  return response.json()
+}
+
+// POST /system/dept
+export async function createDept(
+  parentId: number,
+  deptName: string,
+  orderNum = 0
+): Promise<{ id: number }> {
+  const response = await authedFetch(getApiUrl('/system/dept'), {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ parent_id: parentId, dept_name: deptName, order_num: orderNum })
+  })
+  if (!response.ok) throw await rbacError(response, '新建部门失败')
+  return response.json()
+}
+
+// POST /system/user —— 管理员建号。部门范围由服务端判（超管任意、部门管理员限本人子树）
+export async function createUser(
+  username: string,
+  password: string,
+  deptId: number
+): Promise<{ id: string; username: string }> {
+  const response = await authedFetch(getApiUrl('/system/user'), {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ username, password, dept_id: deptId })
+  })
+  if (!response.ok) throw await rbacError(response, '新建用户失败')
+  return response.json()
+}
+
+// PUT /system/dept/{dept_id}
+export async function updateDept(
+  deptId: number,
+  parentId: number,
+  deptName: string,
+  orderNum = 0
+): Promise<{ updated: boolean }> {
+  const response = await authedFetch(getApiUrl(`/system/dept/${deptId}`), {
+    method: 'PUT',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ parent_id: parentId, dept_name: deptName, order_num: orderNum })
+  })
+  if (!response.ok) throw await rbacError(response, '保存部门失败')
+  return response.json()
+}
+
+// DELETE /system/dept/{dept_id}
+export async function deleteDept(deptId: number): Promise<{ deleted: boolean }> {
+  const response = await authedFetch(getApiUrl(`/system/dept/${deptId}`), {
+    method: 'DELETE',
+    headers: getAuthHeaders()
+  })
+  if (!response.ok) throw await rbacError(response, '删除部门失败')
+  return response.json()
+}
+
+// PUT /system/user/{user_id}/dept
+export async function setUserDept(userId: string, deptId: number): Promise<{ updated: boolean }> {
+  const response = await authedFetch(getApiUrl(`/system/user/${userId}/dept`), {
+    method: 'PUT',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ dept_id: deptId })
+  })
+  if (!response.ok) throw await rbacError(response, '调整部门失败')
+  return response.json()
+}
+
+// PUT /system/user/{user_id}/roles — 整集替换
+export async function setUserRoles(
+  userId: string,
+  roleIds: number[]
+): Promise<{ updated: boolean; count: number }> {
+  const response = await authedFetch(getApiUrl(`/system/user/${userId}/roles`), {
+    method: 'PUT',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ role_ids: roleIds })
+  })
+  if (!response.ok) throw await rbacError(response, '保存角色失败')
+  return response.json()
+}

@@ -91,8 +91,8 @@ sequenceDiagram
 
 ### 🔴 阻塞
 
-- **账号与登录** — `users` 表无 `email` / `password_hash` / `role`；`server/api/deps.py` 的 `get_default_user_id` 被 24 处路由以 `Depends(...)` 引用，全部返回同一个种子用户。规格见 `docs/requirements.md` §2.8。
-- **多用户隔离未生效** — Skills / MCP / 记忆 / 任务都有 `user_id` 列，但永远填同一个值，§2.8.3 的隔离表落不了地。
+- **账号与登录** — 注册 / 登录 / 刷新 / 登出 / 改密已落地（`server/auth/`），接口一律走 `Depends(get_current_user)`；缺的是邮件找回与限流。规格见 `docs/requirements.md` §2.8。
+- **多用户隔离未生效** — Skills / MCP / 记忆 / 任务都有 `user_id` 列，读写虽按登录身份落库，§2.8.3 的隔离表还没逐条验过。
 - **打包后客户端连不上后端** — 服务端地址只由 Vite dev proxy 提供，production build 不含它；`apiBaseUrl` 默认空串且无 UI 可改。
 - **从未打过安装包** — `agent-client/out/` 有、`dist/` 无，只跑过 `dev` / `build`。上一条 bug 因此从未暴露。
 - **Hub 管理端缺失** — 数据源是 `server/skill-hub.json` 等 JSON 文件，改目录 = 手改 + 重启；experts / teams 无 mutation 端点。
@@ -131,7 +131,7 @@ cd server && alembic upgrade head && cd ..             # 建表
 python -m uvicorn server.main:app --host 127.0.0.1 --port 8000
 ```
 
-需要一个可连的 PostgreSQL。首次启动会自动灌种子数据（默认用户、skill 与 MCP 清单、专家与专家团），表非空就跳过，可以重复启动。起来之后访问 /health 应返回 `{"status":"ok"}`，访问 /metrics 是 Prometheus 指标。
+需要一个可连的 PostgreSQL。首次启动会自动灌种子数据（skill 与 MCP 清单、专家与专家团、内置角色与首个管理员），表非空就跳过，可以重复启动。起来之后访问 /health 应返回 `{"status":"ok"}`，访问 /metrics 是 Prometheus 指标。
 
 ### 2. 客户端
 

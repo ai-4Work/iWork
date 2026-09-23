@@ -1,4 +1,4 @@
-"""登录认证业务：注册、登录、刷新、登出、改密、当前用户。
+"""登录认证业务：建号、登录、刷新、登出、改密、当前用户。
 
 三处容易写错、都在这里收敛：
 
@@ -32,8 +32,11 @@ from server.auth.security import (
     verify_password,
 )
 
+from server.authz.catalog import DEFAULT_ROLE_KEY
 from server.config import settings
-from server.db.models import OrmLoginLog, OrmRefreshToken, OrmUser
+from server.db.models import (
+    OrmLoginLog, OrmRefreshToken, OrmRole, OrmUser, OrmUserRole,
+)
 
 logger = logging.getLogger("iwork.auth")
 
@@ -108,13 +111,35 @@ async def _db_now(db: AsyncSession) -> datetime:
     return (await db.execute(select(func.now()))).scalar_one()
 
 
+async def _assign_default_role(db: AsyncSession, user_id) -> None:
+    """给新建账号挂上默认角色（doc 19-5.5）。
+
+    不挂的话新账号的 `permissions` 是空的 —— 侧边栏一个入口都不显示。
+    角色由种子建立；查不到只记一条告警、不让建号失败：
+    建号不该因为 RBAC 还没初始化好而炸掉。
+    """
+    role_id = (await db.execute(
+        select(OrmRole.id).where(OrmRole.role_key == DEFAULT_ROLE_KEY)
+    )).scalar_one_or_none()
+    if role_id is None:
+        logger.warning("auth.create_user  默认角色 %s 不存在，跳过挂角色", DEFAULT_ROLE_KEY)
+        return
+    db.add(OrmUserRole(user_id=user_id, role_id=role_id))
+    await db.commit()
+
+
 class AuthService:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]):
         self._sf = session_factory
 
-    # ── 注册 ────────────────────────────────────────────
+    # ── 建号 ────────────────────────────────────────────
 
-    async def register(self, username: str, password: str) -> OrmUser:
+    async def create_user(self, username: str, password: str, dept_id: int) -> OrmUser:
+        """管理员建号，开放注册已下线（doc 19-4.2）。
+
+        部门由调用方定 —— 超管可任意、部门管理员限本人子树，那道范围守卫在
+        `dept_routes` 里，这里只负责把 `dept_id` 原样写进去。
+        """
         username = normalize_username(username)
         _validate_username(username)
         try:
@@ -128,6 +153,7 @@ class AuthService:
                 display_name=username,  # 显示名默认取用户名，用户之后可改
                 password_hash=password_hash,
                 status="active",
+                dept_id=dept_id,
             )
             db.add(user)
             try:
@@ -138,7 +164,8 @@ class AuthService:
                 await db.rollback()
                 raise AuthError("USERNAME_TAKEN")
             await db.refresh(user)
-            logger.info("auth.register  username=%s", username)
+            await _assign_default_role(db, user.id)
+            logger.info("auth.create_user  username=%s dept_id=%s", username, dept_id)
             return user
 
     # ── 登录 ────────────────────────────────────────────

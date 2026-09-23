@@ -1,4 +1,5 @@
 import { useAuthStore } from '../stores/authStore'
+import { showToast } from '../utils/toast'
 
 /** 这两个码意味着 refresh token 也没了，只能回登录页（doc 18-8.5） */
 const RELOGIN_CODES = new Set(['TOKEN_INVALID', 'REFRESH_TOKEN_INVALID'])
@@ -32,6 +33,14 @@ export async function authedFetch(
   if (token) headers['Authorization'] = `Bearer ${token}`
 
   const res = await fetch(url, { ...init, headers })
+
+  // 403 是"登录有效、权限不够"，**不能**当成登录态失效处理（doc 19-6.6）：
+  // 清登录态会把人踢回登录页，而他其实只是点了一个自己没权限的按钮。
+  if (res.status === 403) {
+    showToast('权限不足')
+    return res
+  }
+
   if (res.status !== 401) return res
 
   const code = await errorCode(res)

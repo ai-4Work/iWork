@@ -26,7 +26,7 @@ from fastapi.responses import Response
 
 from server.models.message import SkillInstallRequest, SkillCustomCreate, SkillCustomUpdate
 from server.skills.skill_registry import SkillDefinition
-from server.api.deps import get_current_user, get_db
+from server.api.deps import get_current_user, get_db, require_permission
 from server.observability.audit import audit_log
 
 logger = logging.getLogger("iwork.api.skills")
@@ -43,8 +43,15 @@ def _get_skill_registry(request: Request):
 # ═══════════════════════════════════════════════════════════════
 
 @router_skill.get("/hub")
-async def list_hub(request: Request):
-    """获取 Hub 中所有可安装的 Skill。"""
+async def list_hub(
+    request: Request,
+    _: None = Depends(require_permission("system:skill:list", "client:skills:config")),
+):
+    """获取 Hub 中所有可安装的 Skill。
+
+    与 MCP Hub 同理：`system:skill:list` 面向后台管理页，客户端"Skills 配置"
+    页要靠 `client:skills:config` 才列得出来，两者任一即可。
+    """
     registry = _get_skill_registry(request)
     skills = await registry.get_hub_skills()
     return {
@@ -69,7 +76,10 @@ async def list_hub(request: Request):
 # ═══════════════════════════════════════════════════════════════
 
 @router_skill.post("/hub", status_code=201)
-async def add_hub_skill(body: dict, request: Request):
+async def add_hub_skill(
+    body: dict, request: Request,
+    _: None = Depends(require_permission("system:skill:add")),
+):
     """添加 Skill 到 Hub。"""
     registry = _get_skill_registry(request)
     skill = SkillDefinition(**body)
@@ -82,7 +92,10 @@ async def add_hub_skill(body: dict, request: Request):
 # ═══════════════════════════════════════════════════════════════
 
 @router_skill.put("/hub/{skill_id}")
-async def update_hub_skill(skill_id: str, body: dict, request: Request):
+async def update_hub_skill(
+    skill_id: str, body: dict, request: Request,
+    _: None = Depends(require_permission("system:skill:edit")),
+):
     """更新 Hub 中的 Skill。"""
     registry = _get_skill_registry(request)
     existing = await registry.get_hub_by_id(skill_id)
@@ -98,7 +111,10 @@ async def update_hub_skill(skill_id: str, body: dict, request: Request):
 # ═══════════════════════════════════════════════════════════════
 
 @router_skill.delete("/hub/{skill_id}")
-async def delete_hub_skill(skill_id: str, request: Request):
+async def delete_hub_skill(
+    skill_id: str, request: Request,
+    _: None = Depends(require_permission("system:skill:remove")),
+):
     """删除 Hub 中的 Skill。"""
     registry = _get_skill_registry(request)
     ok = await registry.delete_hub(skill_id)

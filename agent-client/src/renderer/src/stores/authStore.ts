@@ -20,6 +20,9 @@ export type AuthStatus = 'loading' | 'authed' | 'anon'
 interface AuthState {
   status: AuthStatus
   user: AuthUser | null
+  /** 后端下发的权限点（doc 19-6.4）。**不进 token**：每次开客户端由 /auth/me 重拉，
+   *  这样管理员改完权限，用户下次启动就生效，不必等 token 过期。 */
+  permissions: string[]
   accessToken: string | null
   refreshToken: string | null
   expiresAt: number
@@ -27,10 +30,11 @@ interface AuthState {
   notice: string | null
   bootstrap: () => Promise<void>
   login: (username: string, password: string) => Promise<void>
-  register: (username: string, password: string) => Promise<void>
   logout: () => Promise<void>
   /** 单飞刷新：并发调用共用同一次 refresh（并发刷新会触发服务端重放检测） */
   refresh: () => Promise<void>
+  /** 重拉当前用户与权限点（登录后、改完授权后调） */
+  refreshPermissions: () => Promise<void>
   clearSession: (notice?: string) => Promise<void>
 }
 
@@ -120,7 +124,11 @@ async function fetchMe(): Promise<void> {
     })
     if (res.ok) {
       const body = await res.json()
-      useAuthStore.setState({ user: body.user })
+      // permissions 与 user 同一个响应回来（doc 19-5.4），少一次往返
+      useAuthStore.setState({
+        user: body.user,
+        permissions: Array.isArray(body.permissions) ? body.permissions : []
+      })
     } else if (res.status === 401) {
       await useAuthStore.getState().clearSession('登录已过期，请重新登录')
     }
@@ -132,6 +140,7 @@ async function fetchMe(): Promise<void> {
 export const useAuthStore = create<AuthState>((set, get) => ({
   status: 'loading',
   user: null,
+  permissions: [],
   accessToken: null,
   refreshToken: null,
   expiresAt: 0,
@@ -185,22 +194,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     }
     applyTokenResponse(await res.json())
     set({ status: 'authed', notice: null })
-  },
-
-  register: async (username, password) => {
-    set({ notice: null })
-    const res = await fetch(apiUrl('/auth/register'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password })
-    })
-    if (!res.ok) {
-      const { message } = await readError(res)
-      set({ notice: message || `注册失败（${res.status}）` })
-      throw new Error('REGISTER_FAILED')
-    }
-    // /auth/register 不返回 token（省掉"注册即登录"这条隐式路径），这里显式登一次
-    await get().login(username, password)
+    // 登录响应不带 permissions，补拉一次；不 await，避免拖慢进主界面
+    void fetchMe()
   },
 
   logout: async () => {
@@ -221,11 +216,14 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   refresh: refreshTokens,
 
+  refreshPermissions: fetchMe,
+
   clearSession: async (notice) => {
     await ipcClient.auth.clear().catch(() => {})
     set({
       status: 'anon',
       user: null,
+      permissions: [],
       accessToken: null,
       refreshToken: null,
       expiresAt: 0,
@@ -233,3 +231,20 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     })
   }
 }))
+
+/**
+ * 权限判断。`perms` 传数组表示**任一满足**，与后端 `require_permission` 同义。
+ * 写成 hook（订阅 permissions）而不是普通函数：管理员改完授权后 `refreshPermissions()`
+ * 一跑，侧边栏就能立刻收回去。
+ */
+export function usePermi(perms: string | string[]): boolean {
+  return hasPermi(useAuthStore((s) => s.permissions), perms)
+}
+
+/** 纯函数版：需要「先过滤再渲染」的地方用它 —— 在 `.filter()` 回调里调 `usePermi`
+ *  等于 hooks in loop，eslint（react-hooks/rules-of-hooks）会拦。
+ *  判断语义只有这一处，`usePermi` 也转调它。 */
+export function hasPermi(owned: readonly string[], perms: string | string[]): boolean {
+  const wanted = Array.isArray(perms) ? perms : [perms]
+  return wanted.some((p) => owned.includes(p))
+}
