@@ -26,7 +26,7 @@ _FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL)
 async def call_json(llm, system: str, user: str) -> str:
     """非流式调用的等价物：把流 drain 成完整文本。tool_choice=none 禁掉工具。
 
-    与 context_compressor._call_haiku_for_compression 同一路子 —— 仓库里的
+    与 context_compressor._call_compression_llm 同一路子 —— 仓库里的
     LLM 客户端只有流式接口，没有 response_format。
     """
     chunks: list[str] = []

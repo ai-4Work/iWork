@@ -421,6 +421,26 @@ async def send_message(
                     "available_agents": agent_ids,
                 })
 
+    # 1.6. 跨协议中途换模型：拒绝。
+    # 历史消息是按 OpenAI 形状**落库**的（`reasoning_content`、`tool_calls` +
+    # `role:"tool"`），Anthropic 消费不了这种形状 —— 中途从 DeepSeek 切到 Anthropic，
+    # 等于把一份非法历史发过去，报错来自厂商、排查方向全反。
+    # 同一协议内随便切（deepseek-chat ↔ 内网 vLLM 都是 OpenAI 兼容），跨协议请新建会话。
+    session_model = engine.session.model or ""
+    if body.model and session_model and body.model != session_model:
+        requested = await engine_mgr.resolver.resolve(body.model)
+        current = await engine_mgr.resolver.resolve(session_model)
+        if requested.protocol != current.protocol:
+            raise HTTPException(400, detail={
+                "error": "protocol_mismatch",
+                "message": (
+                    f"本会话用的是 {current.protocol} 协议，"
+                    f"不能中途切到 {requested.protocol} 协议的模型。请新建会话。"
+                ),
+                "session_protocol": current.protocol,
+                "requested_protocol": requested.protocol,
+            })
+
     # 2. 消息写入队列 + _wake_event.set() 唤醒引擎后台协程
     try:
         msg = await engine.enqueue(str(user_id), body)

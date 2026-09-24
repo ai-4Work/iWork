@@ -31,6 +31,7 @@ from server.sync_waiter import SyncWaiter, user_wait_key, tool_wait_key
 from server.engine.stream_buffer import StreamBuffer
 from server.engine.context import ContextManager
 from server.llm.client import LLMClient, LLMChunk
+from server.llm.resolver import StaticModelResolver
 from server.tools.dispatcher import ToolDispatcher, ToolLocation, SERVER_BUILTIN_TOOLS
 from server.tools.idempotency import (
     tool_idempotency as _tool_idempotency,      # C-3 幂等档
@@ -236,12 +237,17 @@ class EngineManager:
         memory_recall=None,  # L1RecallService | None — L1 记忆召回（未启用时为 None）
         scene_recall=None,  # L2RecallService | None — L2 场景召回（未启用时为 None）
         persona_recall=None,  # L3RecallService | None — L3 画像召回（未启用时为 None）
+        resolver=None,  # ModelResolver | None — 不传则退化成"单客户端"
     ):
         from server.storage.postgres import ConversationHistoryRepo, ExpertHubRepo, TeamHubRepo
 
         self.session_repo = session_repo
         self.message_repo = message_repo
         self.llm_client = llm_client
+        # 模型解析器是引擎侧取客户端的唯一入口（主调用、上下文压缩、便宜模型档）。
+        # 传了真解析器就按 `llm_model` 表解析；没传（单测直接构造）就退化成把
+        # `llm_client` 用在所有模型上 —— 调用点不必分叉，行为与本类改造前一致。
+        self.resolver = resolver or StaticModelResolver(llm_client)
         self.session_factory = session_factory
         self.skill_registry = skill_registry
         self.user_mcp_repo = user_mcp_repo
@@ -250,16 +256,6 @@ class EngineManager:
         self.scene_recall = scene_recall
         self.persona_recall = persona_recall
         self._engines: dict[UUID, "QueryLoopEngine"] = {}
-
-        # Compression-dedicated LLM client (Haiku for Anthropic, reuse for DeepSeek)
-        if settings.llm_provider == "anthropic":
-            from server.llm.client import AnthropicLLMClient
-            self._compression_llm = AnthropicLLMClient(
-                api_key=settings.anthropic_api_key,
-                model=settings.compression_model,
-            )
-        else:
-            self._compression_llm = llm_client
 
         # 每个 EngineManager 实例一个 ConversationHistoryRepo
         self._conv_repo = ConversationHistoryRepo(session_factory) if session_factory else None
@@ -349,7 +345,7 @@ class EngineManager:
                 session_repo=self.session_repo,
                 message_repo=self.message_repo,
                 llm_client=self.llm_client,
-                compression_llm_client=self._compression_llm,
+                resolver=self.resolver,
                 skill_registry=self.skill_registry,
                 conv_repo=self._conv_repo,
                 user_mcp_repo=self.user_mcp_repo,
@@ -441,7 +437,7 @@ class QueryLoopEngine:
         session_repo: SessionRepository,
         message_repo: MessageRepository,
         llm_client: LLMClient,
-        compression_llm_client=None,  # LLMClient for context compression (Haiku or cheap model)
+        resolver=None,  # ModelResolver | None — 不传则退化成"单客户端"
         skill_registry=None,
         conv_repo=None,  # ConversationHistoryRepo
         user_mcp_repo=None,  # UserMcpRepo | None
@@ -457,6 +453,9 @@ class QueryLoopEngine:
         self._session_repo = session_repo
         self._message_repo = message_repo
         self._llm = llm_client
+        # 取模型客户端的唯一入口。主调用 / 上下文压缩 / 便宜模型档都从这里解析，
+        # 本类不再自己读 `settings.llm_provider` 去挑厂商。
+        self.resolver = resolver or StaticModelResolver(llm_client)
         self._skills = skill_registry  # SkillRegistry | None
         self._user_mcp_repo = user_mcp_repo  # UserMcpRepo | None
         self._session_factory = session_factory  # async_sessionmaker | None
@@ -546,16 +545,18 @@ class QueryLoopEngine:
             logger.info("hooks_loaded", count=self.hooks.hook_count,
                         points=list(set(h["on"] for h in hooks_config)))
 
-        # 上下文压缩引擎 (10.5)
-        self._compression_llm = compression_llm_client
-        self._token_counter = TokenCounter(provider=settings.llm_provider)
+        # 上下文压缩引擎 (10.5)。**两个参数都不在这里固化**：
+        # `model_context_limit` 与 `chars_per_token` 都随会话当前模型变，构造时定死
+        # 会让"换了个上下文窗口小得多的模型"依然按 65536 判断、压缩永不触发。
+        # 压缩用的便宜模型客户端同样每轮现解析（`_compression_model_key`）。
+        self._token_counter = TokenCounter()
+        # 压缩/摘要走"便宜模型"档；留空 = 与主模型相同（`resolve("")` 回落到默认模型）。
+        self._compression_model_key = settings.compression_model
         self._offload_store = offload_store
         self._compressor = ContextCompressor(
-            llm_client=compression_llm_client,
+            llm_client=None,
             token_counter=self._token_counter,
-            config=CompressionConfig(
-                model_context_limit=settings.model_context_limit,
-            ),
+            config=CompressionConfig(),
             offload_store=offload_store,
         )
 
@@ -1818,29 +1819,43 @@ class QueryLoopEngine:
                     "tools": len(ctx.available_tools or []),
                 })
 
+            # ── 模型解析：本轮真正发请求要用的客户端与能力参数 ──
+            # 逐轮现取而不是会话级缓存：`model` 是**消息级**字段（"重新生成"旧消息要用
+            # 当时那个模型），缓存会让重跑用错模型。解析器内部按 model_key 缓存客户端
+            # 实例，所以现取不会真的重建 httpx 连接池。
+            resolved = await self.resolver.resolve(
+                msg.model or getattr(self.session, "model", "")
+            )
+
             # ── 上下文压缩 (10.5) ──
-            if self._compression_llm is not None:
-                ctx.messages, comp_report = await self._compressor.compress(
-                    session_id=str(self.session.id),
-                    messages=ctx.messages,
-                    system_prompt=ctx.system_prompt,
-                    tools=ctx.available_tools,
-                    current_turn=turn,
-                    mode=mode,
+            # 上限取**主模型**的窗口（真正约束请求的是它，不是压缩模型）；
+            # 摘要客户端取便宜模型档。
+            compression = await self.resolver.resolve(self._compression_model_key)
+            ctx.messages, comp_report = await self._compressor.compress(
+                session_id=str(self.session.id),
+                messages=ctx.messages,
+                system_prompt=ctx.system_prompt,
+                tools=ctx.available_tools,
+                current_turn=turn,
+                mode=mode,
+                llm_client=compression.client,
+                model_context_limit=resolved.context_window,
+                compress_threshold_tokens=resolved.compress_threshold_tokens,
+                chars_per_token=resolved.chars_per_token,
+            )
+            if comp_report.compressed:
+                self._log.info(
+                    "context_compressed",
+                    turn=turn,
+                    original_tokens=comp_report.original_tokens,
+                    compressed_tokens=comp_report.compressed_tokens,
+                    ratio=f"{comp_report.compression_ratio:.2f}",
+                    layers=comp_report.layers,
                 )
-                if comp_report.compressed:
-                    self._log.info(
-                        "context_compressed",
-                        turn=turn,
-                        original_tokens=comp_report.original_tokens,
-                        compressed_tokens=comp_report.compressed_tokens,
-                        ratio=f"{comp_report.compression_ratio:.2f}",
-                        layers=comp_report.layers,
-                    )
-                    ctx_span.set_attributes({
-                        "context.compressed": True,
-                        "context.compression_ratio": f"{comp_report.compression_ratio:.2f}",
-                    })
+                ctx_span.set_attributes({
+                    "context.compressed": True,
+                    "context.compression_ratio": f"{comp_report.compression_ratio:.2f}",
+                })
 
             if turn == 0:
                 logger.info("context_system\n%s", ctx.system_prompt)
@@ -1874,8 +1889,10 @@ class QueryLoopEngine:
             with tracer.start_as_current_span(
                 "llm_call",
                 attributes={
-                    "llm.provider": settings.llm_provider,
-                    "llm.model": msg.model or settings.default_model,
+                    # 报**实际解析出来的**模型，不是 settings 里那个全局默认值 ——
+                    # 否则 trace 里每个模型看起来都跑在同一个模型上。
+                    "llm.provider": resolved.protocol,
+                    "llm.model": resolved.model_api_name or resolved.model_key,
                     "llm.stream": True,
                     "agent.turn": turn,
                 },
@@ -1888,7 +1905,7 @@ class QueryLoopEngine:
                 first_token_sent = False
                 tokens_in = 0
                 tokens_out = 0
-                async for chunk in self._llm.stream(
+                async for chunk in resolved.client.stream(
                     messages=ctx.messages,
                     system=ctx.system_prompt,
                     tools=ctx.available_tools,

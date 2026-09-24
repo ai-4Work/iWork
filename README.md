@@ -124,7 +124,8 @@ cd i-work
 # 需要 Python 3.12：https://www.python.org/downloads/ （Windows 装完勾选 Add to PATH）
 pip install -r requirements.txt
 
-cp .env.example .env                                   # 至少填 IWORK_DATABASE_URL 与模型 Key
+cp .env.example .env                                   # 至少填 IWORK_DATABASE_URL 与模型 Key；
+                                                       # 库还空着时管理员密码也在这里填（见下）
 
 cd server && alembic upgrade head && cd ..             # 建表
 
@@ -132,6 +133,20 @@ python -m uvicorn server.main:app --host 127.0.0.1 --port 8000
 ```
 
 需要一个可连的 PostgreSQL。首次启动会自动灌种子数据（skill 与 MCP 清单、专家与专家团、内置角色与首个管理员），表非空就跳过，可以重复启动。起来之后访问 /health 应返回 `{"status":"ok"}`，访问 /metrics 是 Prometheus 指标。
+
+**首次登录**：库是空的时候，服务端启动前要先在 `.env` 里配好首个管理员，否则**拒绝启动**：
+
+| 变量 | 填什么 |
+|---|---|
+| `IWORK_BOOTSTRAP_ADMIN_USERNAME` | 账号名，默认 `admin`；3–32 位小写字母、数字、`_` 或 `-` |
+| `IWORK_BOOTSTRAP_ADMIN_PASSWORD` | 密码；**只在账号还不存在时必填** |
+
+启动时种子建出这个账号、挂上 `admin` 角色（权限全集，不用逐条授权），客户端起来就用它登录。
+进去之后在「用户管理 / 角色管理 / 部门配置」里建部门、角色与其他账号 —— 没有自助注册，
+账号一律由管理员创建并当面交付密码。
+
+账号建出来之后这两项不再生效：种子**不覆盖密码、也不覆盖 `status`**，所以改过密码、
+停用过之后重启不会回滚；密码要是忘了，只能直连库改 `users.password_hash`。
 
 ### 2. 客户端
 

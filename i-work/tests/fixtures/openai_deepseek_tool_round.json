@@ -1,0 +1,19 @@
+{
+  "description": "DeepSeek 官方形态 —— 思考走 reasoning_content；工具调用按 index 增量拼装、带 id；arguments 为分片的 JSON 字符串；finish_reason 用 tool_calls；流末尾多一个 choices 为空的 usage-only chunk。",
+  "turns": [
+    "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"先想一下\"},\"finish_reason\":null}]}",
+    "data: {\"choices\":[{\"delta\":{\"content\":\"好的\"},\"finish_reason\":null}]}",
+    "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_abc\",\"function\":{\"name\":\"echo\",\"arguments\":\"{\\\"msg\\\":\"}}]},\"finish_reason\":null}]}",
+    "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"\\\"hi\\\"}\"}}]},\"finish_reason\":null}]}",
+    "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}",
+    "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":7}}",
+    "data: [DONE]"
+  ],
+  "expected": {
+    "chunks": [
+      {"type": "thinking", "delta": "先想一下"},
+      {"type": "text", "delta": "好的"},
+      {"type": "tool_use", "tool_name": "echo", "tool_input": {"msg": "hi"}, "tool_call_id": "call_abc"}
+    ]
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "description": "内网自建（vLLM / SGLang 之流的半兼容层）形态 —— 与 DeepSeek 那条是**同一段对话**，但每一处都可能不一样：思考字段叫 reasoning；tool_calls 不带 index（隐式 0）也不带 id；arguments 直接给已解析的 dict 而非分片字符串；穿插 `: keep-alive` 注释行；全程不给 finish_reason，只以 [DONE] 收尾。归一化后必须与 DeepSeek 那条**完全一致**（id 由客户端合成）。",
+  "turns": [
+    ": keep-alive",
+    "data: {\"choices\":[{\"delta\":{\"reasoning\":\"先想一下\"},\"finish_reason\":null}]}",
+    "data: {\"choices\":[{\"delta\":{\"content\":\"好的\"},\"finish_reason\":null}]}",
+    "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"function\":{\"name\":\"echo\",\"arguments\":{\"msg\":\"hi\"}}}]},\"finish_reason\":null}]}",
+    ": keep-alive",
+    "data: [DONE]"
+  ],
+  "expected": {
+    "chunks": [
+      {"type": "thinking", "delta": "先想一下"},
+      {"type": "text", "delta": "好的"},
+      {"type": "tool_use", "tool_name": "echo", "tool_input": {"msg": "hi"}}
+    ]
+  }
+}

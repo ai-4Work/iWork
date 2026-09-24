@@ -1,0 +1,15 @@
+{
+  "description": "usage 在**尾块**：content → finish_reason=stop → 一个 choices 为空的 usage-only chunk → [DONE]。请求了 stream_options.include_usage 后各家都是这个顺序，usage 因此比 finish_reason 晚到 —— end_turn 必须推迟到流读完才发，否则恒定带着 usage=None。",
+  "turns": [
+    "data: {\"choices\":[{\"delta\":{\"content\":\"好的\"},\"finish_reason\":null}]}",
+    "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}",
+    "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":7}}",
+    "data: [DONE]"
+  ],
+  "expected": {
+    "chunks": [
+      {"type": "text", "delta": "好的"},
+      {"type": "end_turn", "stop_reason": "end_turn", "usage": {"input_tokens": 11, "output_tokens": 7}}
+    ]
+  }
+}

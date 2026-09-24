@@ -120,6 +120,10 @@ class ContextCompressor:
         offload_store=None,  # OffloadStore | None — 10.5.3 external memory
     ) -> None:
         self._llm = llm_client
+        # Per-call client override, set at the top of compress(). The engine
+        # resolves the "cheap model" through the model resolver and passes it
+        # down, so this compressor never has to know about model configuration.
+        self._active_llm = llm_client
         self._tc = token_counter
         self._config = config or CompressionConfig()
         self._offload_store = offload_store
@@ -274,7 +278,7 @@ class ContextCompressor:
         tokens = block.token_count or self._tc.estimate(block.content)
         prompt = prompt_template.format(tokens=tokens, content=block.content[:8000])
         try:
-            summary = (await self._call_haiku_for_compression(prompt)).strip()
+            summary = (await self._call_compression_llm(prompt)).strip()
         except Exception as exc:
             logger.warning("single_block_compression_failed", block_id=block.block_id, error=str(exc))
             return block
@@ -349,7 +353,7 @@ class ContextCompressor:
         prompt = COMPRESSION_PROMPT % (len(group), total_tokens, blocks_text)
 
         try:
-            response_text = await self._call_haiku_for_compression(prompt)
+            response_text = await self._call_compression_llm(prompt)
             # Strip markdown code fences if present
             response_text = _re.sub(r"^```(?:json)?\s*", "", response_text.strip())
             response_text = _re.sub(r"\s*```$", "", response_text)
@@ -395,13 +399,16 @@ class ContextCompressor:
             )
             return group
 
-    async def _call_haiku_for_compression(self, prompt: str) -> str:
-        """Call the compression LLM (Haiku or equivalent cheap model).
+    async def _call_compression_llm(self, prompt: str) -> str:
+        """Call the compression LLM (the resolver's cheap-model tier).
 
         Uses a single-turn non-streaming chat completion.
         """
+        llm = self._active_llm or self._llm
+        if llm is None:
+            raise RuntimeError("未提供压缩用的 LLM 客户端")
         chunks: list[str] = []
-        async for chunk in self._llm.stream(
+        async for chunk in llm.stream(
             messages=[{"role": "user", "content": prompt}],
             system="你是一个上下文压缩引擎。只输出 JSON，不要解释。",
             tools=None,
@@ -458,18 +465,45 @@ class ContextCompressor:
         tools: list[dict] | None = None,
         current_turn: int = 0,
         mode: str = "build",
+        llm_client=None,
+        model_context_limit: int | None = None,
+        compress_threshold_tokens: int | None = None,
+        chars_per_token: float | None = None,
     ) -> tuple[list[dict], CompressionReport]:
         """Main entry point. Build the three-layer compressed context.
+
+        The trailing parameters are per-turn model facts supplied by the caller:
+
+        * `model_context_limit` — the **conversation** model's window, not the
+          compression model's. It bounds the post-compression re-check (step 5/6)
+          i.e. "did we compress enough to fit", and is the base for the trigger
+          line when no absolute threshold is configured.
+        * `compress_threshold_tokens` — the model row's absolute trigger line.
+          Set it and that number is the trigger, verbatim: the mode-dependent
+          ratio (0.55 for `ask`) is a default for unconfigured models, not an
+          override of an explicit admin setting.
+        * `llm_client` — the cheap-model client used for summarising.
+        * `chars_per_token` — the conversation model's tokenization ratio, fed
+          into the counter so the estimate matches the model being served.
+
+        All default to the constructor-installed values so this remains
+        callable standalone (tests, direct use).
 
         Returns (compressed_messages, report).  If no compression is needed,
         returns the original messages unchanged with report.compressed=False.
         """
+        self._active_llm = llm_client or self._llm
+        if chars_per_token:
+            self._tc.use_model(chars_per_token)
+
         # 1. Estimate
         total_est = self._tc.estimate_context(messages, system_prompt, tools)
-        limit = self._config.model_context_limit
-        threshold = self._get_mode_threshold(mode)
+        limit = model_context_limit or self._config.model_context_limit
+        threshold_tokens = compress_threshold_tokens or int(
+            limit * self._get_mode_threshold(mode)
+        )
 
-        if total_est < limit * threshold:
+        if total_est < threshold_tokens:
             return messages, CompressionReport(
                 compressed=False,
                 original_tokens=total_est,

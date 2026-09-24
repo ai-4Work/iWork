@@ -21,3 +21,4 @@ prometheus-client>=0.21
 pyyaml>=6.0
 bcrypt>=4.1.0
 PyJWT>=2.8.0
+cryptography>=42.0

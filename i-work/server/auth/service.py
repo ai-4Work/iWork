@@ -134,11 +134,21 @@ class AuthService:
 
     # ── 建号 ────────────────────────────────────────────
 
-    async def create_user(self, username: str, password: str, dept_id: int) -> OrmUser:
+    async def create_user(
+        self,
+        username: str,
+        password: str,
+        dept_id: int,
+        role_ids: list[int] | None = None,
+    ) -> OrmUser:
         """管理员建号，开放注册已下线（doc 19-4.2）。
 
         部门由调用方定 —— 超管可任意、部门管理员限本人子树，那道范围守卫在
-        `dept_routes` 里，这里只负责把 `dept_id` 原样写进去。
+        `user_routes.py` 里，这里只负责把 `dept_id` 原样写进去。
+
+        `role_ids` 给了就用它、**不**再挂默认角色（建号时直接选角色，省掉"先建后改"
+        那一步）；不给就还是默认角色。角色的合法性（id 存在、不比自己宽）由调用方
+        在进来之前判完 —— 这里只写。
         """
         username = normalize_username(username)
         _validate_username(username)
@@ -164,7 +174,14 @@ class AuthService:
                 await db.rollback()
                 raise AuthError("USERNAME_TAKEN")
             await db.refresh(user)
-            await _assign_default_role(db, user.id)
+            if role_ids:
+                db.add_all([
+                    OrmUserRole(user_id=user.id, role_id=rid)
+                    for rid in sorted(set(role_ids))
+                ])
+                await db.commit()
+            else:
+                await _assign_default_role(db, user.id)
             logger.info("auth.create_user  username=%s dept_id=%s", username, dept_id)
             return user
 
@@ -427,6 +444,17 @@ class AuthService:
             "refresh_token": raw_refresh,
             "expires_in": expires_in,
         }
+
+    async def revoke_all_tokens(self, db: AsyncSession, user_id: uuid.UUID) -> None:
+        """吊销一个用户的全部 refresh token，落调用方的 db / 事务。
+
+        给管理侧用（封号、重置密码）：带自己的 session 进来，与那次写入同一个
+        `commit` —— 分成两次提交会出现「状态改了、token 还在」的窗口。
+
+        **不重签**：管理员不是那个人，新会话该由他自己登录取。对比 `change_password`
+        —— 那里必须返新 token，因为被吊销的会话里就有发起改密的那一个。
+        """
+        await self._revoke_all(db, user_id, await _db_now(db))
 
     async def _revoke_all(
         self, db: AsyncSession, user_id: uuid.UUID, now: datetime

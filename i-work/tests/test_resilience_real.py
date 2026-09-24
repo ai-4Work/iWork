@@ -31,7 +31,7 @@ import pytest
 
 from server.config import settings
 from server.engine.query_loop import EngineManager
-from server.llm.client import DeepSeekLLMClient, LLMChunk
+from server.llm.client import OpenAICompatLLMClient, LLMChunk
 from server.models.message import MessageCreate
 from server.models.session import ClientTool, Session
 
@@ -348,7 +348,7 @@ async def test_llm_429_retry_exhausted(monkeypatch):
     """真起一个只返 429 的 HTTP 服务，让 `client.py` 里那段真重试循环真跑。
 
     用 FakeLLM 回放 retry chunk 测不出"恰好几次"——必须让真 httpx + 真
-    asyncio.sleep 跑起来。退避在 `DeepSeekLLMClient.stream` 内部（max_retries=3）：
+    asyncio.sleep 跑起来。退避在 `OpenAICompatLLMClient.stream` 内部（max_retries=3）：
     首次 + 重试 2 次 = 共 3 次尝试，退避 1s、2s（`2 ** attempt`，attempt=0/1），
     第 3 次失败即终止——**没有第 4 次，也没有第 3 段退避**。
     """
@@ -359,7 +359,7 @@ async def test_llm_429_retry_exhausted(monkeypatch):
     port = server.server_address[1]
 
     monkeypatch.setattr(settings, "deepseek_base_url", f"http://127.0.0.1:{port}")
-    client = DeepSeekLLMClient(api_key="test-key", model="deepseek-chat")
+    client = OpenAICompatLLMClient(api_key="test-key", model="deepseek-chat")
 
     chunks: list[LLMChunk] = []
     started = time.monotonic()

@@ -298,9 +298,12 @@ RBAC 里「权限」其实是两件事，不能混：
 *   **原则 3**：前后端共用同一套标识符，字符串必须完全一致。
 *   **原则 4（模块位决定归谁）**
     *   `client` = **agent-client 的前端**。
-        *   `permission_type = C` → 侧边栏入口，必须在 `ENTRY_VIEWS` 里有键，没有 `path` / `component`（见 4.2 表 19–23、34 行）。
+        *   `permission_type = C` → 侧边栏入口，必须落在 `ENTRY_VIEWS` 某个条目的 `pages` 里，没有 `path` / `component`（见 4.2 表 18–23、37 行）。
         *   `permission_type = F` → 页面内按钮，用 `<Permi>` 包（见 6.5）。
     *   `system` 等模块位 = 服务端 / 带路由的后台，`C` 才配 `path` + `component`。
+*   **原则 5（一个控件一个点）**：F 点的显示名就是页面上那个控件的名字。
+    *   页面上有几个控件就有几个点。页面上**没有**对应控件、但一进页面就要调的读接口，是**读取依赖**，写在该页那段的叙事里，不占按钮行。
+    *   一支 API 被两个控件用时，两个点都绑这支 API：路由 `require_permission(a, b)` 任一放行，handler 再用 `assert_permission` 按请求内容挑准那一个（见 5.2）。
 
 ### 4.2 完整的权限点字典表（前后端契约表）
 这张表由**后端主导起草，前端评审补充**，是**后端权限清单（`catalog.py` 的 `PERMISSIONS`）的人类可读版**——落库不靠手写 SQL，由启动对账自动生成（见 4.4）。
@@ -311,55 +314,63 @@ RBAC 里「权限」其实是两件事，不能混：
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | 1 | 系统管理 | NULL | M | `/system` | `Layout` | 系统管理 | 0 | — |
 | 2 | 用户管理 | `system:user:list` | C | `/system/user` | `system/user/index` | 用户管理 | 1 | `GET /api/system/user/list` |
-| 3 | 查看详情 | `system:user:query` | F | — | — | 详情 | 2 | `GET /api/system/user/{id}` |
-| 4 | 新增用户 | `system:user:add` | F | — | — | 新增 | 2 | `POST /api/system/user` |
-| 5 | 编辑用户 | `system:user:edit` | F | — | — | 编辑 | 2 | `PUT /api/system/user` |
-| 6 | 删除用户 | `system:user:remove` | F | — | — | 删除 | 2 | `DELETE /api/system/user/{id}` |
-| 7 | 导出用户 | `system:user:export` | F | — | — | 导出 | 2 | `GET /api/system/user/export` |
-| 8 | 重置密码 | `system:user:resetPwd` | F | — | — | 重置密码 | 2 | `PUT /api/system/user/resetPwd` |
-| 9 | 技能 Hub 管理 | `system:skill:list` | C | `/system/skill` | `system/skill/index` | 技能 Hub | 1 | `GET /api/skills/hub` |
-| 10 | 新增技能 | `system:skill:add` | F | — | — | 新增 | 9 | `POST /api/skills/hub` |
-| 11 | 编辑技能 | `system:skill:edit` | F | — | — | 编辑 | 9 | `PUT /api/skills/hub/{skill_id}` |
-| 12 | 删除技能 | `system:skill:remove` | F | — | — | 删除 | 9 | `DELETE /api/skills/hub/{skill_id}` |
-| 13 | MCP Hub 管理 | `system:mcp:list` | C | `/system/mcp` | `system/mcp/index` | MCP Hub | 1 | `GET /api/mcp/hub` |
-| 14 | 新增 MCP | `system:mcp:add` | F | — | — | 新增 | 13 | `POST /api/mcp/hub` |
-| 15 | 编辑 MCP | `system:mcp:edit` | F | — | — | 编辑 | 13 | `PUT /api/mcp/hub/{server_id}` |
-| 16 | 删除 MCP | `system:mcp:remove` | F | — | — | 删除 | 13 | `DELETE /api/mcp/hub/{server_id}` |
-| 17 | 全局统计 | `system:stats:view` | C | `/system/stats` | `system/stats/index` | 全局统计 | 1 | `GET /api/system/stats/view` |
-| 18 | 审计日志 | `system:audit:list` | C | `/system/audit` | `system/audit/index` | 审计日志 | 1 | `GET /api/admin/audit` |
-| 19 | Skills 配置入口 | `client:skills:config` | C | — | — | Skills 配置 | 0 | — |
-| 20 | MCP 配置入口 | `client:mcp:config` | C | — | — | MCP 配置 | 0 | — |
-| 21 | 记忆配置入口 | `client:memory:config` | C | — | — | 记忆配置 | 0 | — |
-| 22 | 专家和专家团入口 | `client:expert:config` | C | — | — | 专家和专家团 | 0 | — |
+| 3 | 新增用户 | `system:user:add` | F | — | — | 新增 | 2 | `POST /api/system/user` |
+| 4 | 编辑用户 | `system:user:edit` | F | — | — | 编辑 | 2 | `PUT /api/system/user/{user_id}` |
+| 5 | 重置密码 | `system:user:resetPwd` | F | — | — | 重置密码 | 2 | `PUT /api/system/user/{user_id}/password` |
+| 6 | 停用/启用 | `system:user:status` | F | — | — | 停用/启用 | 2 | `PUT /api/system/user/{user_id}/status` |
+| 7 | 解锁 | `system:user:unlock` | F | — | — | 解锁 | 2 | `PUT /api/system/user/{user_id}/unlock` |
+| 8 | 技能 Hub 管理 | `system:skill:list` | C | `/system/skill` | `system/skill/index` | 技能 Hub | 1 | `GET /api/skills/hub` |
+| 9 | 新增技能 | `system:skill:add` | F | — | — | 新增 | 8 | `POST /api/skills/hub` |
+| 10 | 编辑技能 | `system:skill:edit` | F | — | — | 编辑 | 8 | `PUT /api/skills/hub/{skill_id}` |
+| 11 | 删除技能 | `system:skill:remove` | F | — | — | 删除 | 8 | `DELETE /api/skills/hub/{skill_id}` |
+| 12 | MCP Hub 管理 | `system:mcp:list` | C | `/system/mcp` | `system/mcp/index` | MCP Hub | 1 | `GET /api/mcp/hub` |
+| 13 | 新增 MCP | `system:mcp:add` | F | — | — | 新增 | 12 | `POST /api/mcp/hub` |
+| 14 | 编辑 MCP | `system:mcp:edit` | F | — | — | 编辑 | 12 | `PUT /api/mcp/hub/{server_id}` |
+| 15 | 删除 MCP | `system:mcp:remove` | F | — | — | 删除 | 12 | `DELETE /api/mcp/hub/{server_id}` |
+| 16 | 全局统计 | `system:stats:view` | C | `/system/stats` | `system/stats/index` | 全局统计 | 1 | `GET /api/system/stats/view` |
+| 17 | 审计日志 | `system:audit:list` | C | `/system/audit` | `system/audit/index` | 审计日志 | 1 | `GET /api/admin/audit` |
+| 18 | Skills 配置入口 | `client:skills:config` | C | — | — | Skills 配置 | 0 | — |
+| 19 | MCP 配置入口 | `client:mcp:config` | C | — | — | MCP 配置 | 0 | — |
+| 20 | 记忆配置入口 | `client:memory:config` | C | — | — | 记忆配置 | 0 | — |
+| 21 | 专家和专家团入口 | `client:expert:config` | C | — | — | 专家和专家团 | 0 | — |
+| 22 | 用户管理入口 | `client:user:config` | C | — | — | 用户管理 | 0 | — |
 | 23 | 角色权限配置入口 | `client:rbac:config` | C | — | — | 角色权限配置 | 0 | — |
 | 24 | 角色管理 | `system:role:list` | C | `/system/role` | `system/role/index` | 角色管理 | 1 | `GET /api/system/role/list` |
 | 25 | 查看权限点清单 | `system:permission:list` | F | — | — | 查看权限点清单 | 24 | `GET /api/system/permission/list` |
 | 26 | 查看授权 | `system:role:query` | F | — | — | 查看授权 | 24 | `GET /api/system/role/{role_id}/permissions` |
-| 27 | 修改授权 | `system:role:grant` | F | — | — | 修改授权 | 24 | `PUT /api/system/role/{role_id}/permissions` |
-| 28 | 修改数据范围 | `system:role:edit` | F | — | — | 修改数据范围 | 24 | `PUT /api/system/role/{role_id}` |
+| 27 | 修改授权 | `system:role:grant` | F | — | — | 保存 | 24 | `PUT /api/system/role/{role_id}/permissions` |
+| 28 | 修改数据范围 | `system:role:edit` | F | — | — | 数据范围 | 24 | `PUT /api/system/role/{role_id}` |
 | 29 | 部门管理 | `system:dept:list` | C | `/system/dept` | `system/dept/index` | 部门管理 | 1 | `GET /api/system/dept/list` |
-| 30 | 新增部门 | `system:dept:add` | F | — | — | 新增 | 29 | `POST /api/system/dept` |
-| 31 | 编辑部门 | `system:dept:edit` | F | — | — | 编辑 | 29 | `PUT /api/system/dept/{dept_id}` |
-| 32 | 删除部门 | `system:dept:remove` | F | — | — | 删除 | 29 | `DELETE /api/system/dept/{dept_id}` |
-| 33 | 分配成员 | `system:dept:assign` | F | — | — | 分配成员 | 29 | `PUT /api/system/user/{user_id}/dept` |
-| 34 | 部门配置入口 | `client:dept:config` | C | — | — | 部门配置 | 0 | — |
-| 35 | 分配用户 | `system:role:assign` | F | — | — | 分配用户 | 24 | `PUT /api/system/user/{user_id}/roles` |
+| 30 | 新建顶级部门 | `system:dept:addRoot` | F | — | — | 新建顶级部门 | 29 | `POST /api/system/dept` |
+| 31 | 新建子部门 | `system:dept:addChild` | F | — | — | 新建子部门 | 29 | `POST /api/system/dept` |
+| 32 | 添加用户 | `system:dept:addUser` | F | — | — | 添加用户 | 29 | `POST /api/system/user` |
+| 33 | 编辑部门 | `system:dept:edit` | F | — | — | 改名 | 29 | `PUT /api/system/dept/{dept_id}` |
+| 34 | 删除部门 | `system:dept:remove` | F | — | — | 删除 | 29 | `DELETE /api/system/dept/{dept_id}` |
+| 35 | 调整成员所属部门 | `system:dept:assign` | F | — | — | 所属部门 | 29 | `PUT /api/system/user/{user_id}/dept` |
+| 36 | 分配角色 | `system:role:assign` | F | — | — | 角色 | 29 | `PUT /api/system/user/{user_id}/roles` |
+| 37 | 部门配置入口 | `client:dept:config` | C | — | — | 部门配置 | 0 | — |
 
-> **第 23–28 行是「角色管理」页**（这个权限点的名字仍是「角色权限配置」，见上表第 23 行——侧边栏那一页叫「角色管理」）：23 是 agent-client 的入口，24–28 是它调用的五个接口。23 授予谁，谁就能在客户端里配其余角色的权限。
+> **第 23–28 行是「角色管理」页**（这个权限点的名字仍是「角色权限配置」，见上表第 23 行——侧边栏那一页叫「角色管理」）：23 是 agent-client 的入口；24 读角色列表，25、26 是两条**读取依赖**（权限点清单、各角色已授权 —— 页面上没有对应控件，缺一条整张矩阵就画不出来）；27、28 是两个写入，页面上共用一个「保存」按钮，两个点任一即可出现、各自只提交自己那一半。
 >
-> **第 29–33 行是部门层，34 是它的客户端入口**。29–33 是服务端接口（部门增删改 + 挪人），34 是 agent-client 侧边栏的「部门配置」页 —— 谁拿到 34 谁才看得见那一页。`system:user:list`（第 2 行）与 `system:user:add`（第 4 行）的接口是为这一页落的 —— 一个读人、一个给部门加人；其余 `system:user:*` 仍待建。
+> **第 29–37 行是「部门配置」页**：37 是 agent-client 的入口，29–36 是页面上七个控件各自的点 —— 29 读部门树，30 / 31 建顶级与子部门（同一支 `POST /dept`，靠请求体里的 `parent_id` 分流），32 添加用户，33 改名，34 删除，35 挪人，36 换角色。另有两条读取依赖不占按钮行：`system:user:list`（第 2 行）读成员表、`system:role:list`（第 24 行）读角色列（缺了整列不渲染）。
 >
-> **第 35 行挂在「角色管理」下（parent 24），但服务的是部门配置页**：给用户挂角色这件事属于角色命名空间（同 33 行挂在部门下的切法），可它落在 client 那一侧的那个成员表上。所以「部门配置」页要显示角色，除了 34 还得有 24（读角色名）—— 或 35（可写）。
+> **第 2–7 行是「用户管理」页**（入口是第 22 行）：2 读列表，3 建号，4 改显示名，5 重置密码，6 停用/启用，7 解锁。另有三条**读取依赖**不占按钮行：`system:user:list`（第 2 行，列表本体）、`system:dept:list`（第 29 行，部门名）、`system:role:list`（第 24 行，角色名）—— 缺哪条，哪一列/整个列表就不渲染。
+>
+> **第 3 行带 `role_ids` 时还要第 36 行**：建号可以顺手把角色定好，不选就挂默认角色。这道闸在 handler 里（`assert_permission`）而非依赖里 —— 这一支 POST 的依赖是「第 3 行与第 32 行任一」，把 36 加进依赖就等于让只有换角色权限的人也能建号；也因此它不写进清单的 `apis`（启动对账只比对依赖级引用，写进去就是一处假漂移）。
+>
+> **第 32 行与第 3 行是同一支 `POST /api/system/user`**：建号归用户管理，所以第 3 行留在那里；但部门页那个「添加用户」是这一页的控件，于是又有第 32 行 —— 路由按任一放行。36 的行同理：端点在 `user/*` 面下（给用户挂角色），点归**用它那一页** —— 页面上有哪个控件，点就挂在那一页的菜单下（29–36 就是这个口径的产物）。
+>
+> **第 35 / 36 行与「用户管理」页共用**：挪部门、换角色在部门配置页与用户管理页**都有控件**，于是共用同一批点、同一支 API（`user_routes.py`）。同一件事不开两个点 —— 开了两页的可见性就会各走各的（部门页给得出、用户页给不出，或反之）。
 
 *   **`#` 是给人读的逻辑序号，不是库里的 `id`**。
     *   `id` 由 `AUTO_INCREMENT` 生成，**种子不要手写**：PG 手写 id 不推进自增序列，之后正常插入就会撞主键。
     *   落库时按 `perms` 反查真实 id，`parent_id` 也在这时解析成真实 id（见 4.4）。
-*   **第 9–18 行、24–28 行、29–33 行和 35 行是 `system` 模块位（带路由的后台）**，接口是否已存在要分开看：
-    *   **已存在的**：2、4（用户列表与建号，只为部门配置页落的，见下）、9、13（对应 `/skills/hub`、`/mcp/hub`，各 1 读 3 写）、18（`/admin/audit`）、24–28（`/system/role/*`、`/system/permission/*`）、29–33（`/system/dept/*`、`/system/user/*/dept`）和 35（`/system/user/*/roles`）。
-    *   **待建的**：3、5–8 的用户管理其余 5 个点、17 的全局统计。点先定下来，接口随后写。
-    *   **切法和 2–8 行一致**：列表 + 增删改各一个点。判据是 3.1 的粒度——「能装技能但不能下架技能」是真实存在的授权需求，拆开才表达得了。
+*   **第 8–17 行、24–28 行和 29–36 行是 `system` 模块位（带路由的后台）**，接口是否已存在要分开看：
+    *   **已存在的**：2–7（用户管理面整块，`/system/user/*`）、8、12（对应 `/skills/hub`、`/mcp/hub`，各 1 读 3 写）、17（`/admin/audit`）、24–28（`/system/role/*`、`/system/permission/*`）、29–36（`/system/dept/*`、`/system/user/list`、`/system/user/{user_id}/{dept,roles}`）。
+    *   **待建的**：只剩 16 的全局统计。点先定下来，接口随后写。
+    *   **切法和 2–7 行一致**：列表 + 增删改各一个点。判据是 3.1 的粒度——「能装技能但不能下架技能」是真实存在的授权需求，拆开才表达得了。
     *   **`path` / `component` 是给将来那个后台页面留的占位**：这些页面还没建，先按后台约定填上，不影响先挂 API 权限。
-*   **第 19–23 行和 34 行没有对应后端 API**。
+*   **第 18–23 行和 37 行没有对应后端 API**。
     *   原因：`client:*` 是纯前端入口，在 agent-client 里就是一个侧边栏入口，`path` / `component` 留空（见 6.4），所以 `sys_permission_api` 里不会有它们。
     *   这正是「权限清单必须由代码声明、不能靠扫路由生成」的理由（见 4.4）。
 
@@ -398,14 +409,14 @@ RBAC 里「权限」其实是两件事，不能混：
 *   路由上的 `require_permission("...")`。
 *   前端的入口表和 `<Permi>`。
 
-声明处不能是路由的原因：路由只表达得了「这个 API 要什么权限」，表达不了**没有 API 的权限点**（纯前端入口，就是上表 19–23 行）、中文名和层级。所以清单单独立一处，路由负责引用它。
+声明处不能是路由的原因：路由只表达得了「这个 API 要什么权限」，表达不了**没有 API 的权限点**（纯前端入口，就是上表 18–23、37 行）、中文名和层级。所以清单单独立一处，路由负责引用它。
 
 ```
 后端 catalog.py（唯一声明处）
    ├─ 启动对账 ──▶ 字典表 sys_permission / sys_permission_api
    │                    │
    └─ 启动校验 ──▶ app.routes 的 require_permission(...)   └─ GET /auth/me ──▶ { permissions: [...] }
-前端 ENTRY_VIEWS { perms → 组件 } ──按 permissions 取交集──▶ 渲染
+前端 ENTRY_VIEWS { 条目 → pages } ──按 permissions 取交集──▶ 渲染
 前端 <Permi perms={[...]}>（按钮）─────── CI 双向比对 ──────┘
 ```
 
@@ -417,21 +428,21 @@ RBAC 里「权限」其实是两件事，不能混：
         *   **占位符统一**：契约表写 `{id}`，FastAPI 里常是 `{user_id}` / `{skill_id}` / `{server_id}`，两边都折成 `{}` 再比。
 
     为什么（见 4.2）：字典表是代码的镜像，落后就会 403。
-2.  **字典表 → 前端**：`/auth/me` **只加 `permissions`，不下发入口清单**（见 5.4）。前端自己持有 `perms → 组件` 映射，拿 `permissions` 取交集渲染（见 6.4）。
-3.  **前端 ↔ 清单（CI，双向）**：抽前端源码里的 perms 字符串（`ENTRY_VIEWS` 的键 + `<Permi perms={[...]}>`），与 `catalog.py --json` 的导出双向比对：
+2.  **字典表 → 前端**：`/auth/me` **只加 `permissions`，不下发入口清单**（见 5.4）。前端自己持有 `条目 → pages` 与 `页 → perms` 两份映射，拿 `permissions` 取交集渲染（见 6.4）。
+3.  **前端 ↔ 清单（CI，双向）**：抽前端源码里的 perms 字符串（`PAGE_PERMS` + `<Permi perms={[...]}>`），与 `catalog.py --json` 的导出双向比对：
     *   **正向**：前端用了、清单里没有 → 构建失败（拼错字、用了已下线的点）。
-    *   **反向**：清单里「模块位 = `client` 且 `permission_type = C`」的入口，`ENTRY_VIEWS` 里没有对应的键 → 构建失败。
+    *   **反向**：清单里「模块位 = `client` 且 `permission_type = C`」的入口，没有落在任何条目的 `pages` 里 → 构建失败。
         *   专拦「后端加了入口、前端漏配」。
-        *   漏配在运行时是**完全静默**的：渲染遍历的是 `ENTRY_VIEWS` 的键，漏掉的 perms 根本进不了遍历集合，连 admin 也看不到（见 4.5）。
+        *   漏配在运行时是**完全静默**的：渲染遍历的是 `ENTRY_VIEWS` 的 `pages`，漏掉的 perms 根本进不了遍历集合，连 admin 也看不到（见 4.5）。
     *   反向的判据用清单里已有的 `permission_type`（C=菜单/入口，F=按钮），不发明新的命名后缀；`system:*` 那几条 C 因为模块位不是 `client`，天然不误报。
 
 两条配套要点：
 
-*   **新增一个前端入口 = 前后端都要动**：清单加一行 + 前端 `pages.ts` 加一行（还要补图标和 `AppLayout` 的渲染分支，完整四处见 6.4）。
+*   **新增一个前端入口 = 前后端都要动**：清单加一行 + 前端 `pages.ts` 加一行（`PAGE_PERMS` 再加进某个条目的 `pages`；还要补图标和 `AppLayout` 的渲染分支，完整四处见 6.4）。
     *   不是冗余：权限点必须进了字典表才能挂到角色上（`sys_role_permission` 要 `permission_id`），否则管理员无从授权，该 perms 永远不会出现在任何人的 `permissions` 里。
     *   反过来让前端定义权限点也不行：客户端不可信。
 *   **前端遇到不认识的 perms 不用特殊处理**。
-    *   渲染遍历的是 `ENTRY_VIEWS` 的键，不认识的 perms 进不了遍历集合，既不会崩、也无从告警。
+    *   渲染遍历的是 `ENTRY_VIEWS` 的 `pages`，不认识的 perms 进不了遍历集合，既不会崩、也无从告警。
     *   「新后端 + 旧客户端」是常态（后端加了 `client:foo:config`，老客户端不认识），表现就是**该入口不显示**——这是可接受的。
     *   真正要防的是**同一份代码里前端漏配**，那靠 CI 反向比对拦（见 6.4）。
 
@@ -477,11 +488,12 @@ RBAC 里「权限」其实是两件事，不能混：
 
     > 清单那 35 条对她没有直接意义，剩下 32 条她一整天碰不到。结果按 `user_id` 缓存在进程内存（见 5.1），她一天点多少次都不重查库。
 
-2.  **alice 的侧边栏渲染**：`ENTRY_VIEWS` 六个键按 `section` 分组后逐条查 `hasPermi` → 「配置」组下 skills / mcp / memory 显示，「专家和专家团」与「系统管理」整组（「角色管理」「部门配置」）**不渲染**。
-3.  **alice 点「Skills 配置」** → `configPage = 'client:skills:config'` → 渲染 `<SkillsConfig />` 浮层。
+2.  **alice 的侧边栏渲染**：`ENTRY_VIEWS` 各条目按 `section` 分组后逐条查 `hasPermi` → 「配置」组下 skills / mcp / memory 显示，「专家和专家团」与「系统管理」（角色管理/部门配置两页）**不渲染**。
+    *   「自动化」是 `pages: []` 的占位条目，没有权限点可比，对她照样显示。
+3.  **alice 点「Skills 配置」** → `configPage = 'skills'` → 渲染 `<SkillsConfig />` 浮层。
     *   点入口本身没有鉴权开销——前端只是查了个数组。
     *   真正的边界在接口那头：挂了 `require_permission` 的后端会**独立复核一次**，不信前端藏没藏（见 1.2）。
-4.  **bob 在另一台机器上打开同一个发行包** → `/auth/me` → `admin` 短路 → 返回清单全集 35 条 → 他的六个入口全显示。
+4.  **bob 在另一台机器上打开同一个发行包** → `/auth/me` → `admin` 短路 → 返回清单全集 35 条 → 他的 6 个条目全显示（「系统管理」出两个页签）。
 5.  **差异从哪来**：同一份二进制、同一份 `ENTRY_VIEWS`，差别**只在 `/auth/me` 返回的那个数组里**。这就是"权限在数据里、不在代码里"——加人、调权限都不用重新打包客户端。
 
 三层的活跃度其实很不对称：
@@ -502,15 +514,15 @@ RBAC 里「权限」其实是两件事，不能混：
 
 | 权限点 | 类型 | 谁用它 |
 | :--- | :--- | :--- |
-| `client:model:config` | C（入口） | 前端 `ENTRY_VIEWS` 加一个键 |
+| `client:model:config` | C（入口） | 前端 `PAGE_PERMS` 加一条、再挂进某条目的 `pages` |
 | `client:model:add` | F（按钮） | 前端 `<Permi>` 包按钮；后端路由挂 `require_permission` |
 
-补进 4.2 那张契约表就是这两行（接在第 35 行之后，写法和 19–23 行一致）：
+补进 4.2 那张契约表就是这两行（接在第 37 行之后，写法和 18–23 行一致）：
 
 | # | 业务功能 | 权限点 | permission_type | path | component | 按钮文案 | parent_id | 对应后端 API |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| 36 | 模型配置入口 | `client:model:config` | C | — | — | 模型配置 | 0 | — |
-| 37 | 新增模型 | `client:model:add` | F | — | — | 新增模型 | 36 | `POST /api/settings/model/add` |
+| 38 | 模型配置入口 | `client:model:config` | C | — | — | 模型配置 | 0 | — |
+| 39 | 新增模型 | `client:model:add` | F | — | — | 新增模型 | 38 | `POST /api/settings/model/add` |
 
 **改的顺序，五步：**
 
@@ -518,7 +530,7 @@ RBAC 里「权限」其实是两件事，不能混：
 2.  **后端路由引用 F 点**：新增 `POST /settings/model/add`。
     *   签名里加 `_: None = Depends(require_permission("client:model:add"))`（见 5.2）。
     *   C 点没有任何路由引用它——它没有 API，就是个纯前端入口。
-3.  **前端入口表加一个键**：`ENTRY_VIEWS` 里加 `'client:model:config'`（见 6.4）。
+3.  **前端入口表加一页**：`PAGE_PERMS` 加 `client:model:config`，`ConfigPage` 加 `'model'`，再挂进某个条目的 `pages`（见 6.4）。
 4.  **前端按钮包 `<Permi>`**：`<Permi perms={['client:model:add']}>`（见 6.5）。
 5.  **文档契约表补两行**（4.2）。它是清单的镜像，代码动了它就动。
 
@@ -527,12 +539,12 @@ RBAC 里「权限」其实是两件事，不能混：
 | 漏了 | 谁拦 |
 | :--- | :--- |
 | 后端清单（第 1 步） | 路由一挂上，启动校验就抛错、不启动；前端一写这些 perms，CI 正向比对构建失败 |
-| 前端 `ENTRY_VIEWS`（第 3 步） | CI 反向比对构建失败 |
+| 前端入口表（第 3 步） | CI 反向比对构建失败 |
 | 前端 `<Permi>`（第 4 步） | 构建期没人拦。表现是按钮对谁都显示、点击被后端 403 打回——不是安全洞，但白挨一次报错 |
 
 **然后发布，看它怎么生效：**
 
-1.  **后端发版** → 启动时 `sync_catalog()` 把两行 upsert 进字典表，清单从 35 条变 37 条。
+1.  **后端发版** → 启动时 `sync_catalog()` 把两行 upsert 进字典表，清单从 37 条变 39 条。
 2.  **此刻还没有人能新用上**。清单多了只是「这道菜上了菜单」——
     *   `sys_role_permission` 里没有这两条，非 admin 角色的 `permissions` 一点没变。
     *   alice 下次开客户端，`/auth/me` 还是那三条，「模型配置」不显示。
@@ -626,6 +638,19 @@ async def list_users(
     dept_ids = await visible_dept_ids(db, dept_id) if scope == "DEPT" else None
     return await user_repo.list_visible(user_id, scope, dept_ids)
 ```
+
+*   一支 API 被两个 F 点复用、要按请求内容分流时（4.2 的第 30 / 31 行就是），依赖先按"任一即可"放行，handler 第一句再挑准那一个：
+
+```python
+    _: None = Depends(require_permission("system:dept:addRoot", "system:dept:addChild")),
+):
+    await assert_permission(
+        db, user_id,
+        "system:dept:addRoot" if body.parent_id == 0 else "system:dept:addChild",
+    )
+```
+
+*   `assert_permission` 也是 403、同一份缓存，两边形状一致。写在最前：没权限的人不该从后面的 400 / 404 里看出部门存不存在。
 
 > **服务端路由没有 `/api` 前缀**
 > *   `/api` 是客户端的 base：持久化的 `Settings.apiBaseUrl` 初值是**空串**，每个调用点再 `settings.apiBaseUrl || '/api'` 兜底（`services/api.ts` 的 `DEFAULT_BASE_URL`）。由 electron-vite dev proxy 转发时剥掉，见 `agent-client/electron.vite.config.ts`。
@@ -743,7 +768,7 @@ async def me(
     *   **默认部门** → insert-if-missing：按业务键 `dept_key = 'default'` 查，缺了才插 `parent_id=0` 的「默认部门」。已存在则一行不改 —— 管理员把它改名成「总部」是正当操作。
     *   **用户归属** → 每次启动把 `dept_id IS NULL` 的人补成默认部门。
         *   这就是「后台不建组织架构，大家也都有默认部门」的兜底语义。
-        *   只覆盖**存量**：新号由建号接口直接写上管理员选的部门（见 4.2 第 4 行），不走这条回填。
+        *   只覆盖**存量**：新号由建号接口直接写上管理员选的部门（见 4.2 第 3 行），不走这条回填。
     *   **顺序：要排在 `seed_rbac` 之后** —— 首个管理员账号是那一步建的，跑早了它第一次会漏掉回填。
 
 > ⚠️ 别用现有种子那种「整表 `count == 0` 才插」的写法：表里只要先有了一行，`admin` 角色就可能永远建不出来。
@@ -752,7 +777,7 @@ async def me(
 
 种子直接建一个 `admin` 账号，挂上 `admin` 角色 —— 第一个管理员由种子给出，不靠任何注册路径。
 
-*   种子建 `admin` / `dept_admin` / `user` 三个角色，加 4.2 那 35 行权限点。
+*   种子建 `admin` / `dept_admin` / `user` 三个角色，加 4.2 那 37 行权限点。
     *   **三个角色都必须显式写 `data_scope`**：`admin` = `ALL`、`dept_admin` = `DEPT`、`user` = `SELF`。
         *   漏了就会吃 `sys_role` 的默认 `SELF`——admin 权限全通、数据却只剩自己（见 2.2 / 5.3）。
     *   显示名：`admin` 叫「超级管理员」、`dept_admin` 叫「管理员」、`user` 叫「普通用户」。
@@ -778,9 +803,10 @@ async def me(
 
 | 面 | 位置 | 怎么处理 |
 | :--- | :--- | :--- |
-| 管理面 | `skill_routes.py` 的 `/skills/hub` 4 条、`mcp_routes.py` 的 `/mcp/hub` 4 条（各 1 读 3 写）；`routes.py` 的 `/admin/audit` 1 条。共 9 条，**当前全都无鉴权** | 挂新权限点，用 4.2 表 9–16、18 行那批 `system:*`；**两条 `GET /hub` 是例外**——客户端也要读它来渲染 Hub 列表，所以用 `require_permission("system:skill:list", "client:skills:config")`（MCP 同理），任一满足即可，否则普通用户开客户端就 403 |
+| 管理面 | `skill_routes.py` 的 `/skills/hub` 4 条、`mcp_routes.py` 的 `/mcp/hub` 4 条（各 1 读 3 写）；`routes.py` 的 `/admin/audit` 1 条。共 9 条，**当前全都无鉴权** | 挂新权限点，用 4.2 表 8–15、17 行那批 `system:*`；**两条 `GET /hub` 是例外**——客户端也要读它来渲染 Hub 列表，所以用 `require_permission("system:skill:list", "client:skills:config")`（MCP 同理），任一满足即可，否则普通用户开客户端就 403 |
 | 角色配置面 | 新增 `system_routes.py` 的 5 条 `/system/role/*`、`/system/permission/*` | 用 4.2 表 24–28 行那批 `system:*`。**`PUT` 两条写完要清权限缓存**（见 5.1），否则管理员改了授权、对方 15 分钟内还看旧入口 |
-| 部门面 | 新增 `dept_routes.py` 的 6 条：`/system/dept/*` 4 条、`/system/user/{user_id}/dept`、`/system/user/{user_id}/roles`，外加 `GET /system/user/list` | 用 4.2 表 29–33、35 行那批 `system:*`（`/user/list` 用第 2 行的 `system:user:list`）。`GET /user/list` 落 §5.3 的 `list_visible` 过滤 —— 只落了「列表」这一类。`/user/{user_id}/roles` 写完要清权限缓存（见 5.1），清的**是那一个用户**：这里知道改的是谁，用 `invalidate(user_id)` 就够，不必 `clear_all` |
+| 部门面 | 新增 `dept_routes.py` 的 4 条 `/system/dept/*` | 用 4.2 表 29–34 行那批 `system:*`。`POST /dept` 是两点共用：由 30 / 31 行按 `body.parent_id` 分流（见 5.2）。挪树 / 删部门改了整棵子树的形状，受影响的人反查不出来 → `clear_all()`（见 5.1） |
+| 用户面 | 新增 `user_routes.py` 的 8 条 `/system/user/*`：list、create、edit、dept、roles、password、status、unlock | 用 4.2 表 2–7、35、36 行那批 `system:*`。`POST /user` 由第 3 行与第 32 行任一放行，body 带 `role_ids` 时另按第 36 行判一次（在 handler 里，故不写进清单的 `apis`）；`GET /user/list` 落 §5.3 的 `list_visible` 过滤 —— 只落了「列表」这一类。`/user/{user_id}/dept` 与 `/roles` 写完要清权限缓存（见 5.1），清的**是那一个用户**：这里知道改的是谁，用 `invalidate(user_id)` 就够，不必 `clear_all`。`/status` 停用与 `/password` 重置都要顺手吊销那个人的全部 refresh token（见 18-3.4 / 18-3.5）—— 不吊销，旧会话照用，这两件事等于没做 |
 | session 面 | `routes.py` 里 **18 个完全没挂鉴权的 handler**：`/{session_id}` 读改删、`/stream`、`/messages`、`/agents`、`/state`、`/effects`、`/queue`、`/queue/{msg_id}`、`/plan/{confirm,edit,answer}`、`/cancel`、`/tool-result/{request_id}`、`/messages/{id}/{regenerate,continue}`、`/replay`；外加 **1 个挂了 `get_current_user`、却没查归属的 `POST /messages`** | 先补归属校验：`session.user_id == 调用者`，即数据权限 `SELF` 档（见 5.3）。这批现在是「知道 `session_id` 就能读写别人的会话」——正是 3.2 落点清单的第一个真实例子 |
 | 专家面 | `agent_routes.py` 的 4 条：`GET /experts`、`/experts/{expert_id}/download`、`/teams`、`/teams/{team_id}/download`（router 无 prefix，**不是** `/agents/*`） | 只读，先补 `get_current_user` |
 
@@ -792,7 +818,7 @@ async def me(
 **5. 权限变更留痕**
 
 *   复用现成的 `audit_log()`（`server/observability/audit.py`），写进 `audit_logs` 表（`server/db/models.py` 的 `OrmAuditLog`）。
-*   `action` 取 `admin.role_permission_changed` / `admin.user_role_changed` / `admin.role_data_scope_changed`，部门面加 `admin.dept_created` / `admin.dept_updated` / `admin.dept_removed` / `admin.user_dept_changed`。
+*   `action` 取 `admin.role_permission_changed` / `admin.user_role_changed` / `admin.role_data_scope_changed`，部门面加 `admin.dept_created` / `admin.dept_updated` / `admin.dept_removed` / `admin.user_dept_changed`，用户面加 `admin.user_created` / `admin.user_updated` / `admin.user_password_reset` / `admin.user_status_changed` / `admin.user_unlocked`。
 *   与既有的 `user.message_sent`、`user.skill_installed` 命名保持一致。
 *   `action` 列是 `String(50)`：上面最长的 `admin.role_data_scope_changed` 是 29 字符，别再往上叠词。
 *   `audit_log()` 只 `execute`、**不 commit**：handler 里自己的 `db` session 只承载这条审计，不显式 `await db.commit()` 会在 session 关闭时被回滚掉。
@@ -829,7 +855,7 @@ async def me(
 | 通用落点 | 本项目 | 依据 |
 | :--- | :--- | :--- |
 | **路由** | **无对应物** | 没有 router；视图切换是 `components/layout/AppLayout.tsx` 的 `useState<ConfigPage \| null>` + 条件渲染 |
-| **菜单** | 有，但**只剩一层** | `Sidebar.tsx` 里平铺的入口项，没有二级目录。当前 7 个：6 个真入口 + 1 个无后端的「自动化」占位（见 6.4） |
+| **菜单** | 有，但**只剩一层** | `Sidebar.tsx` 里平铺的入口项，没有侧边栏二级目录。当前「配置」分组 6 个条目：4 个单页入口 + 1 个无后端的「自动化」占位 + 1 个「系统管理」（下含角色管理/部门配置两页，见 6.4） |
 | **按钮** | 有，**主战场** | 「新建任务」、各配置页里的增删改 |
 | **数据** | 不适用 | 不在前端判，见 3.2 |
 
@@ -847,6 +873,8 @@ async def me(
 
 *   比如聊天空态里加一个「去配置技能」的引导按钮，很容易忘了判权限。
 *   新加入口时，把它当 review 检查项。
+
+> 这一节只讲**客户端这一端的落点**；整条链（清单 → 下发 → 判定 → 三种消费 → 服务端兜底）见 §七。
 
 ### 6.3 权限存哪与判定入口
 
@@ -882,46 +910,56 @@ export function usePermi(perms: string | string[]): boolean {
 
 ### 6.4 入口控制（替代「动态路由」）
 
-侧边栏入口用一张 `perms → 页面标识` 的表声明（`components/config/pages.ts`），无权限的项**不渲染**：
+侧边栏入口用一张 `条目 → 一组页` 的表声明（`components/config/pages.ts`），无权限的项**不渲染**：
 
 ```ts
 // components/config/pages.ts —— 前端入口的唯一声明处
-export type ConfigPage = 'skills' | 'mcp' | 'memory' | 'expert' | 'rbac' | 'dept'
+export type ConfigPage = 'skills' | 'mcp' | 'memory' | 'expert' | 'rbac' | 'dept' | 'user'
 
-export const CONFIG_TITLES: Record<ConfigPage, string> = { skills: 'Skills 配置', /* ... */ rbac: '角色管理', dept: '部门配置' }
+export const CONFIG_TITLES: Record<ConfigPage, string> = { skills: 'Skills 配置', /* ... */ rbac: '角色管理', dept: '部门配置', user: '用户管理' }
 
-export const ENTRY_VIEWS: ReadonlyArray<{ page: ConfigPage; perms: string; section: string }> = [
-  { page: 'skills', perms: 'client:skills:config', section: '配置' },
-  // ... 每个 client:* 权限点一个键
-  { page: 'rbac',   perms: 'client:rbac:config',   section: '系统管理' },
-  { page: 'dept',   perms: 'client:dept:config',   section: '系统管理' },
+export const PAGE_PERMS: Record<ConfigPage, string> = { skills: 'client:skills:config', /* ... */ rbac: 'client:rbac:config', dept: 'client:dept:config', user: 'client:user:config' }
+
+/** 一个条目 = 浮层顶部的一条菜单栏。`pages` 第一项是默认页；空数组 = 占位条目。 */
+export const ENTRY_VIEWS: ReadonlyArray<{
+  id: EntryId
+  section: string
+  pages: readonly ConfigPage[]
+  title?: string
+}> = [
+  { id: 'skills', section: '配置', pages: ['skills'] },
+  // ... 每个 client:* 权限点一个页，归到某个条目下
+  { id: 'automation', section: '配置', pages: [], title: '自动化' },
+  { id: 'system',     section: '配置', pages: ['user', 'rbac', 'dept'], title: '系统管理' },
 ]
 ```
 
-侧边栏按它渲染：先按 `section` 分组，组内逐条 `hasPermi(permissions, entry.perms)` 过滤，**一组里一条都不剩就整组连标题一起不渲染**（`Sidebar.tsx`）。
+侧边栏按它渲染：先按 `section` 分组，组内逐条按它 `pages` 的权限点**任一命中**过滤，**一组里一条都不剩就整组连标题一起不渲染**（`Sidebar.tsx`）。
+浮层顶部的菜单栏也是同一份 `pages`：本人有权限的页多于一个才出页签（`AppLayout.tsx`）。
 
 *   用 `hasPermi`（纯函数）而不是 `usePermi`：过滤要发生在渲染之前，在 `.filter()` 回调里调 hook 会被 `react-hooks/rules-of-hooks` 拦。
 *   `section` 是**纯视觉分组**，不是权限点的 `M` 档目录（见本节末尾那条）。
 
-*   **表里存的是「页面标识」，不是组件**：`page` 是稳定的短名，`perms` 是它要的权限点，两者**分开**。
+*   **表里存的是「页面标识」，不是组件**：`pages` 里是稳定的短名，它要的权限点在 `PAGE_PERMS` 里，两者**分开**。
     *   页面的渲染仍留在 `AppLayout`（`{configPage === 'skills' && <SkillsConfig />}`）。把组件塞进表里看着更省，但那样权限字符串变了就得连组件一起动；现在改 `perms` 只动一行常量。
     *   这张表是**唯一**的入口声明处：`ConfigPage` 类型、`CONFIG_TITLES`、`ENTRY_VIEWS` 都在同一个文件，`Sidebar` 与 `AppLayout` 各自 import——以前两边各写一份 `type ConfigPage`，加页面时只改一边也编译得过、运行时表现为「点了没反应」。
 *   **旧客户端不认识新入口 → 该入口不显示，这是可接受的**
     *   「新后端 + 旧客户端」是常态，而渲染只遍历自己的 `ENTRY_VIEWS`，不认识的 perms 进不了遍历集合，既不会崩、也无从告警。
     *   真正要防的是**同一份代码里前端漏配**——漏配同样完全静默（权限授了、入口没出现，连 admin 也看不到），只能靠 CI 反向比对拦（见 4.4）。
-*   **新增一个入口 = 改四处，其中后两处编译器会提醒**：
+*   **新增一个页 = 改四处，其中后两处编译器会提醒**：
     1.  `catalog.py` 加一行（权限点）。
-    2.  `pages.ts` 加一行 + `ConfigPage` 联合类型加一项。
-    3.  `Sidebar.tsx` 的 `ENTRY_ICONS` 补图标。
+    2.  `pages.ts` 加一行（`PAGE_PERMS`）+ `ConfigPage` 联合类型加一项，再把这一页挂进某个条目的 `pages`。
+    3.  该条目若因此变成多页，`Sidebar.tsx` 的 `ENTRY_ICONS` 不用动（图标按条目）；新加条目才要补。
     4.  `AppLayout.tsx` 补 `{configPage === 'x' && <XConfig />}` 那一支。
-    *   第 2–3 步是 `Record<ConfigPage, ...>`，联合类型一改就编译不过，忘不了。**第 4 步是会静默漏的那个**：漏了的表现是入口在、点开是空白，没有报错——review 时专门看一眼这一处。
+    *   第 2–3 步是 `Record<ConfigPage, ...>` 与 `Record<EntryId, ...>`，联合类型一改就编译不过，忘不了。**第 4 步是会静默漏的那个**：漏了的表现是入口在、点开是空白，没有报错——review 时专门看一眼这一处。
     *   后端那行不是冗余——权限点必须先进清单才能落库、才能经 `sys_role_permission.permission_id` 挂到角色上，否则管理员无从授权，该 perms 永远不会出现在任何人的 `permissions` 里（见 4.4）。
-*   **「自动化」那个占位按钮**：它没有任何后端、`onClick` 是空实现，所以**不进 `ENTRY_VIEWS`**，仍在 `Sidebar.tsx` 里当静态项直接渲染，对所有人可见（代码里留了注释说明）。
-    *   代价是它不受权限控制——可接受，因为它本来也点不出任何东西。
+*   **「自动化」是个占位条目**：它没有任何后端，所以在表里写成 `pages: []`。
+    *   空 `pages` 视同「对所有人可见」，点击不打开浮层（`onClick` 是空实现）——不受权限控制可接受，因为它本来也点不出任何东西。
     *   别给它编一个没后端的 `client:xxx:config`：反向比对会要求它在 `ENTRY_VIEWS` 里有键，正向比对又查不到 API，白白制造噪音。
-*   **agent-client 的「菜单」就是这一层入口项** —— 没有二级目录、没有路由表。
+*   **agent-client 的「菜单」就是这一层入口项** —— 没有侧边栏二级目录、没有路由表。
     *   §1.4 的**目录/菜单两档是给后台管理平台（带路由的 Web 后台）用的**；在 agent-client 里只落到「入口显不显示」这一档，别照着 §1.4 去找 `Layout` 和路由表。
-    *   侧边栏的**分组标题**（`section`，如「配置」「系统管理」）只是这两个中文字符串，写死在 `ENTRY_VIEWS` 里——它不是 `M` 档目录、不进清单、不参与授权，一个组显不显示只由组内入口的权限决定。
+    *   侧边栏的**分组标题**（`section`）只是中文字符串，写死在 `ENTRY_VIEWS` 里——它不是 `M` 档目录、不进清单、不参与授权，一个组显不显示只由组内入口的权限决定。
+    *   「系统管理」下的三页（用户管理/角色管理/部门配置）是**浮层顶部菜单栏**，不是侧边栏的二级菜单：侧边栏只有它一个条目，点开落在第一个有权限的页。
 
 ### 6.5 按钮级控制
 
@@ -969,6 +1007,154 @@ if (res.status === 403) {
     *   后端那边也得同步清缓存，不然重拉还是旧值（见 5.1 的写穿）。
 
 
+
+---
+
+## 七、端到端：一个权限点从清单到界面
+
+前面几节按端分开写：§四 讲清单、§五 讲后端、§六 讲前端。这一节把它们串起来，回答两个问题：
+
+*   一个权限点，是怎么走到界面上的一个控件（或者一页、一次请求）的？
+*   为什么「进得去、却什么都没得点」是**正常状态**，不是 bug？
+
+### 7.1 全链路
+
+```
+① 声明      server/authz/catalog.py 的 PERMISSIONS           唯一声明处（§4.4）
+              │ 启动时 sync_catalog() 按 perms 对账（增改 + 下线）
+              ▼
+② 落库      sys_permission（字典表）+ sys_permission_api（接口绑定）
+              │ 管理员在「角色管理」页勾选 → 写 sys_role_permission
+              ▼
+③ 取集合    load_user_permissions()                          显式授权并集；admin / dept_admin 短路成全量（§5.1）
+              │ 走读缓存，改授权时由写侧失效
+              ▼
+④ 下发      GET /auth/me → { user, permissions: [...] }       一串纯字符串（§5.4）
+              ▼
+⑤ 存        authStore.permissions（fetchMe() 写入；登录与启动各拉一次，§6.3）
+              ▼
+⑥ 判定      hasPermi(owned, perms) ←「这个字符串在不在数组里」  全前端唯一的判定口径
+              ▼
+⑦ 消费      入口闸门 / 控件闸门 / 读取闸门（7.3）
+              ▼
+⑧ 兜底      require_permission() / assert_permission()        每个请求各自过一次（§5.1、§5.2）
+```
+
+⑥ 是链上唯一的判定原语；它下游那三个落点**互不相干**——谁也算不出另一个的结果，各查各的同一份数组。
+
+### 7.2 后端给的是什么
+
+`GET /auth/me`（`server/api/auth_routes.py`）的返回：
+
+```json
+{
+  "user": { "id": "9f3a…", "username": "alice", "display_name": "爱丽丝", "status": "active" },
+  "permissions": [
+    "client:dept:config",
+    "client:memory:config",
+    "client:skills:config",
+    "system:dept:assign",
+    "system:dept:list",
+    "system:role:list",
+    "system:user:list"
+  ]
+}
+```
+
+*   **只有标识字符串**：没有层级、没有中文名、没有 `type`、没有接口绑定，更没有菜单树。
+    *   这是刻意的：客户端自己持有「perms → 入口 / 控件」的映射（§6.4），下发的数组只用来查那张表（§6.3）。
+*   **来源是并集，不是单角色**：
+    *   user → `sys_user_role` → 角色（`status = 1`）→ `sys_role_permission` → 权限点（`status = 1`），去重取并集。
+    *   `system:*` 与 `client:*` 混在同一串里，前端**不区分这两类前缀**，只看字符串在不在。
+*   **`admin` / `dept_admin` 不查授权行**：命中 `ALL_PERMS_ROLE_KEYS` 直接返回 `all_perms()` 全集（§5.1）。
+    *   这是「以后新增的权限点超管立刻就有」的原因——不是库里授权多，是短路。
+    *   同理，这两个角色手上那几行显式授权是摆设，被短路覆盖。
+
+### 7.3 前端消费一个点，只有三种情形
+
+| 情形 | 挂在哪 | 例子 | 判据 |
+| :--- | :--- | :--- | :--- |
+| **入口闸门** | `PAGE_PERMS` 表（表驱动） | `client:dept:config` ↔ 侧边栏「部门配置」 | 条目 `pages` 任一命中就渲染（§6.4） |
+| **控件闸门** | 页内就地 `usePermi` / `<Permi>` | `system:dept:addChild` ↔ 行尾「⋯」里的「新建子部门」 | 决定按钮**渲不渲染**（§6.5） |
+| **读取闸门** | 页内就地 `usePermi`，**页面上没有对应控件** | `system:role:query` ↔ 整张矩阵能不能画出来 | 决定 `load()` 发不发请求、显示哪句提示 |
+
+*   **读取闸门是本节要补的那一档**：点仍是 F 档（按钮），但页面上找不到对应控件——它管的是「一进页面就要调的那些读接口」。
+    *   两处表现：**不发请求**（没权限就别调，403 会让整页只剩一句报错）；**换一句提示**（说清缺的是哪一个点）。
+    *   例：`RbacConfig` 的 `canSeePerms`（权限点清单）+ `canQueryGrants`（各角色已授权）——缺任一条整张矩阵画不出来，所以拆成两条，提示才说得清；`DeptConfig` 的 `canSeeRoles`（`system:role:list`）——缺了角色列整列不渲染，并且**不能**去拉 `/role/list`（一拉就 403）。
+    *   反例：点挂在某个控件上、实际该管的是另一处——「拦错位置」是这一类最常见的 bug（判据见 §4.1 原则 5）。
+*   `type`（`M` / `C` / `F`）**不影响功能怎么挂**，它只决定角色管理页那张矩阵怎么排树。
+    *   依据：客户端没有路由（§6.2），所以 `C` 档的 `path` / `component` 在这里没有消费方，接口也刻意不下发（§5.4）。
+
+### 7.4 实例：把值代进去
+
+假设 alice 的 `permissions` 就是 7.2 那一串，走一遍。
+
+**侧边栏**（`Sidebar.tsx`，§6.4 那个过滤）：逐个条目算 `hasPermi(permissions, e.pages.map((p) => PAGE_PERMS[p]))`
+
+| 条目 `id` | `e.pages` | 代入后的 `wanted` | 与 alice 的数组求交集 | 渲染 |
+| :--- | :--- | :--- | :--- | :--- |
+| skills | `['skills']` | `['client:skills:config']` | 命中 | 是 |
+| mcp | `['mcp']` | `['client:mcp:config']` | 空 | 否 |
+| memory | `['memory']` | `['client:memory:config']` | 命中 | 是 |
+| expert | `['expert']` | `['client:expert:config']` | 空 | 否 |
+| automation | `[]` | — | `pages.length === 0` 短路为真 | 是（占位） |
+| system | `['user', 'rbac', 'dept']` | `['client:user:config', 'client:rbac:config', 'client:dept:config']` | 演到第三个才命中 | 是 |
+
+*   `system` 那一行是 `some` 的效果：先试 `client:user:config`（不在）→ 再试 `client:rbac:config`（不在）→ 最后 `client:dept:config`（在）→ 真。
+    *   所以条目出现时**不知道是哪一个命中的**——这一层只回答「给不给看」，不回答「看哪一页」。
+
+**点「系统管理」落在哪一页**：`entry.pages.find(...)` 逐个试 → `'user'` 假 → `'rbac'` 假 → `'dept'` 真 → 落在部门配置。
+
+**浮层页签**（`AppLayout.tsx`）：`['user', 'rbac', 'dept']` 过滤后只剩 `['dept']` → 只有一个可见页 → **不出页签栏**，标题直接是「部门配置」。
+
+**页内按钮**（`DeptConfig.tsx` 开头那一组）：
+
+| 变量 | 代入的点 | alice 有吗 | 结果 |
+| :--- | :--- | :--- | :--- |
+| `canAddRoot` | `system:dept:addRoot` | 无 | 顶栏「新建顶级部门」不渲染 |
+| `canAddChild` | `system:dept:addChild` | 无 | 「⋯」里的「新建子部门」不渲染 |
+| `canEdit` | `system:dept:edit` | 无 | 「改名」不渲染 |
+| `canRemove` | `system:dept:remove` | 无 | 「删除」不渲染 |
+| `canAssign` | `system:dept:assign` | **有** | 「所属部门」下拉可改 |
+| `canCreateUser` | `['system:dept:addUser', 'system:user:add']` | 都无 | 「添加用户」不渲染 |
+| `hasRowActions` | 上面四个写点的或 | 全假 | 行尾「⋯」整个不渲染 |
+| `canSeeRoles` | `system:role:list` | **有** | 角色列渲染 |
+
+*   页面结果：部门树 + 成员表 + 角色列 + 「所属部门」下拉可改；增删改按钮一个都没有。
+*   那句「你只能查看部门结构…」**不出现**——它的条件是所有写点全假，而 `canAssign` 为真。
+
+**拿掉一个点的对照**：把 `system:dept:assign` 也去掉后重登
+
+*   侧边栏与页签**完全不变**（它们看的是 `client:dept:config`，还在）。
+*   页内全假 → 下拉没了、行尾「⋯」没了，那句只读提示**出现**。
+
+**「用户管理」页同理**：它那组 `can*`（`UserConfig.tsx`）看的是 `system:user:list / add / edit / resetPwd / status / unlock`（4.2 表 2–7 行），加上与部门页**共用**的 `system:dept:assign` / `system:role:assign`（35、36 行）—— 后两个点一改，两页同时变，这正是「同一件事不开两个点」的可见性代价为零。三条读取闸门各守一列：`system:user:list` 管整张表、`system:dept:list` 管部门列、`system:role:list` 管角色列。
+
+这就是「两层用两套点、互不影响」的实际样子：入口在不在是一回事，进去能干什么另一回事。
+
+### 7.5 两层用的是两套点
+
+*   **入口**：`client:*`，纯前端入口，没有 API。
+*   **能力**：`system:*`，跟着后端接口。
+*   一个人可以只有入口、一个能力点都没有——「进得去但全只读」是正常状态。权限系统不为此报错，由页面自己给提示。
+
+### 7.6 两处权威：清单在服务端，绑定在客户端
+
+*   **清单的权威在服务端**：`catalog.py` 一处声明，谁也不能绕（§4.4）。
+*   **绑定的权威在客户端代码里**：入口是 `PAGE_PERMS` 里的一行字符串，控件是各页 `usePermi(...)` 的字面量。
+    *   服务端不知道「部门配置」是哪一页，它只认字符串。
+    *   代价与唯一的机器校验见 §4.4、§6.5：打错一个字符编译器不报错，运行期与「没权限」完全同形；前端这层的比对脚本尚未搭。
+
+### 7.7 改完授权怎么传播到界面
+
+```
+管理员保存 → 写侧失效缓存 → 那个人重拉 GET /auth/me → store.permissions 变
+          → usePermi 订阅着它 → 侧边栏 / 页签 / 按钮当场变
+```
+
+*   重拉的时机两条：重新登录；或调用方显式调 `refreshPermissions()`（如「角色管理」页保存完自己就调一次，免得改到自己那一档时侧边栏与后端不一致）。
+*   本地没过期、服务端已经变了 → 请求回 403：**重拉一次即可，不要清登录态**（§6.6）。
+*   所以前端隐藏只是展示层：它负责「绝大多数情况不给点」，403 兜底接住「权限刚被回收」与「前端漏判」两种；真正的边界始终在后端（§1.2）。
 
 ---
 

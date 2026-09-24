@@ -72,6 +72,21 @@ def require_permission(*perms: str):
     return _check
 
 
+async def assert_permission(db: AsyncSession, user_id: UUID, *perms: str) -> None:
+    """handler 内的补充闸门：路由级依赖看不到请求体，挑不出该用哪一个点。
+
+    一支 API 被两个 F 点复用、要按请求内容分流时（如 `POST /system/dept` 的顶级
+    与子部门）用它：依赖先按"任一即可"放行，进来再挑准那一个。
+    与 `require_permission` 同一个 403 形状、同一份读缓存（doc 19-5.1）。
+    """
+    owned = await load_user_permissions(db, user_id)
+    if not any(p in owned for p in perms):
+        raise HTTPException(
+            403,
+            detail={"error": "PERMISSION_DENIED", "message": "权限不足"},
+        )
+
+
 def get_engine_manager(request: Request):
     """FastAPI 依赖注入：从 app state 获取 EngineManager。"""
     return request.app.state.engine_manager

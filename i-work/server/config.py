@@ -29,6 +29,13 @@ class Settings(BaseSettings):
     # 默认模型名；消息自身未指定 model 时回落到此（仅用于实际选模与日志/指标，不参与权限）
     # 使用: server/llm/client.py:76,125、query_loop.py:944,969,1499,1521,1776
     default_model: str = ""
+    # 环境变量名 IWORK_MODEL_API_KEY_ENCRYPTION_KEY。
+    # 模型 API Key 的加密主密钥（Fernet，44 字符 base64）。**只放本地 .env，不落库** ——
+    # 整库泄露时没有它也解不开 llm_model.api_key_enc。
+    # 未配置时不拒绝启动（key 仍可继续只走 .env），但经管理页写入 key 会被拒。
+    # 生成：python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    # 使用: server/llm/secrets.py、server/db/seed.py（seed_llm_models）
+    model_api_key_encryption_key: str = ""
 
     # ── 引擎配置 ──
     # 单条消息最多执行多少轮 LLM 循环（工具调用轮、被截断后的续写轮均计入）
@@ -37,13 +44,16 @@ class Settings(BaseSettings):
     # 单条消息总执行超时（秒），超时则置 error + 推送 code=execution_timeout
     # 使用: server/engine/query_loop.py:1384（每轮开头检查）
     message_timeout_seconds: int = 1800
-    # 上下文 token 上限；估算超过该值即触发上下文压缩（DeepSeek v4 默认 64K）
-    # 使用: server/engine/query_loop.py:348（构造 ContextCompressor）、
-    #       context_compressor.py:469（判断是否超限）
+    # 上下文窗口兜底值（模型行自己有 context_window 列）；估算超过它 × 比例即触发
+    # 压缩。模型行配了 llm_model.compress_threshold_tokens（绝对 token）时以那个为准。
+    # 使用: server/db/seed.py（种子行的窗口）、server/llm/resolver.py（行缺窗口时回落）、
+    #       context_compressor.py:496-499（换算触发线）
     model_context_limit: int = 65536
-    # 压缩上下文时使用的模型（固定走 Anthropic 客户端，与主模型解耦）
-    # 使用: server/engine/query_loop.py:190
-    compression_model: str = "claude-haiku-4-5"
+    # 压缩/摘要用的"便宜模型"档，填 `llm_model.model_key`；留空 = 与主模型相同。
+    # 取值口径与下面的 l1_extraction_model / l2_consolidation_model 一致。
+    # 填了个库里没有的模型名会回落到默认模型并打一次 warning，不拒绝启动。
+    # 使用: server/engine/query_loop.py（_compression_model_key）、server/main.py（L1-L3 回落链）
+    compression_model: str = ""
     # 等待客户端同步应答（Plan 确认 / 客户端工具回投结果）的默认超时（秒）
     # 使用: server/engine/query_loop.py:309（SyncWaiter 默认超时）
     sync_wait_timeout_seconds: int = 300

@@ -144,6 +144,82 @@ async def seed_expert_hub_data(session_factory: async_sessionmaker[AsyncSession]
             logger.info("seed.team_hub  count=%d", seeded)
 
 
+async def seed_llm_models(session_factory: async_sessionmaker[AsyncSession]) -> None:
+    """把 `.env` 里的单模型配置迁成 `llm_model` 的第一行。表非空则跳过。
+
+    这是**升级不改变行为**的保证：在此之前模型名/端点/密钥全在 `settings` 里，
+    建表后若不迁，解析器查不到任何模型、只能回落默认 —— 而那个默认此时也是空的。
+
+    两个刻意的取值：
+
+    * `model_key` 直接用 `IWORK_DEFAULT_MODEL` 的值。因为库里已有的
+      `sessions.model` / `messages.model` 存的就是这个字符串，换个 key 会让存量会话
+      全部解析不到模型。管理员之后可以在管理页改显示名，但 key 别动。
+    * `supports_thinking=True`。原实现对 DeepSeek 是**无条件**塞
+      `thinking={"type":"enabled"}` 的，这里若落成默认的 False，升级后思考能力会被静默关掉。
+
+    单价刻意留空（= 不计费）：`observability/pricing.json` 目前没有任何代码引用，
+    单位无法核实，与其猜一个错的换算不如让管理员自己填。
+    """
+    from server.db.models import OrmLlmModel
+    from server.llm.secrets import SecretKeyError, encrypt_key, mask_key
+
+    provider = (settings.llm_provider or "deepseek").strip().lower()
+    model_name = settings.default_model.strip()
+    if not model_name:
+        logger.info("seed.llm_model  skipped  reason=IWORK_DEFAULT_MODEL 为空")
+        return
+
+    if provider == "anthropic":
+        protocol, api_key, base_url = "anthropic", settings.anthropic_api_key, ""
+    else:
+        protocol = "openai_compatible"
+        api_key, base_url = settings.deepseek_api_key, settings.deepseek_base_url
+
+    async with session_factory() as db:
+        result = await db.execute(select(func.count(OrmLlmModel.id)))
+        if result.scalar() != 0:
+            return
+
+        # 加密放在"表非空则跳过"之后：否则每次启动都会为一次不会发生的迁入
+        # 打一条"IWORK_MODEL_API_KEY_ENCRYPTION_KEY 未配置"的告警，而它其实无关紧要 ——
+        # 只在真的要走这条行时才值得提醒。
+        api_key_enc = None
+        if api_key:
+            try:
+                api_key_enc = encrypt_key(api_key, settings.model_api_key_encryption_key)
+            except SecretKeyError:
+                # 主密钥没配不是错误：解析器会回落到 settings 里对应的 key。
+                # 但这条行本身不带密钥，管理页会显示"未配置"。
+                logger.warning(
+                    "seed.llm_model  key 未入库  reason=IWORK_MODEL_API_KEY_ENCRYPTION_KEY 未配置，"
+                    "该模型暂时只能用 .env 里的 %s_API_KEY",
+                    provider.upper(),
+                )
+
+        db.add(OrmLlmModel(
+            model_key=model_name,
+            display_name=model_name,
+            deployment_type="public",
+            protocol=protocol,
+            vendor=provider,
+            model_api_name=model_name,
+            base_url=base_url,
+            api_key_enc=api_key_enc,
+            api_key_hint=mask_key(api_key) if api_key else "",
+            context_window=settings.model_context_limit,
+            max_output_tokens=20000,   # 原 llm/client.py 的 _DEEPSEEK_MAX_TOKENS
+            supports_tools=True,
+            supports_thinking=True,
+            remark=f"由 .env 迁移而来（provider={provider}）",
+        ))
+        await db.commit()
+        logger.info(
+            "seed.llm_model  key=%s  protocol=%s  has_key=%s",
+            model_name, protocol, bool(api_key_enc),
+        )
+
+
 async def seed_rbac(session_factory: async_sessionmaker[AsyncSession]) -> None:
     """RBAC 字典表对账 + 角色/首个管理员（doc 19-5.5）。
 

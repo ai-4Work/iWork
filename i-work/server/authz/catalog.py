@@ -53,20 +53,22 @@ def _btn(key: str, name: str, apis: tuple = (), planned: bool = False) -> dict:
 
 PERMISSIONS: tuple[dict, ...] = (
     _dir("系统管理", "/system", "Layout", children=(
+        # 六个点，一页装得下：列表 + 建号 + 改显示名 + 重置密码 + 停用启用 + 解锁。
+        # 曾声明的「详情 / 删除 / 导出」已下线：详情没有界面消费它，导出没有落点，
+        # 删除会把 12 张表连带清掉（`users.id` 的 11 个 CASCADE + login_logs 的 SET NULL）
+        # —— 封号该用停用，不该用删除。
         _menu("system:user:list", "用户管理", "/system/user", "system/user/index",
               apis=(("GET", "/api/system/user/list"),), children=(
-                  _btn("system:user:query", "详情",
-                       apis=(("GET", "/api/system/user/{id}"),), planned=True),
                   _btn("system:user:add", "新增",
                        apis=(("POST", "/api/system/user"),)),
                   _btn("system:user:edit", "编辑",
-                       apis=(("PUT", "/api/system/user"),), planned=True),
-                  _btn("system:user:remove", "删除",
-                       apis=(("DELETE", "/api/system/user/{id}"),), planned=True),
-                  _btn("system:user:export", "导出",
-                       apis=(("GET", "/api/system/user/export"),), planned=True),
+                       apis=(("PUT", "/api/system/user/{user_id}"),)),
                   _btn("system:user:resetPwd", "重置密码",
-                       apis=(("PUT", "/api/system/user/resetPwd"),), planned=True),
+                       apis=(("PUT", "/api/system/user/{user_id}/password"),)),
+                  _btn("system:user:status", "停用/启用",
+                       apis=(("PUT", "/api/system/user/{user_id}/status"),)),
+                  _btn("system:user:unlock", "解锁",
+                       apis=(("PUT", "/api/system/user/{user_id}/unlock"),)),
               )),
         _menu("system:skill:list", "技能 Hub", "/system/skill", "system/skill/index",
               apis=(("GET", "/api/skills/hub"),), children=(
@@ -84,6 +86,20 @@ PERMISSIONS: tuple[dict, ...] = (
                   _btn("system:mcp:remove", "删除",
                        apis=(("DELETE", "/api/mcp/hub/{server_id}"),)),
               )),
+        # 模型配置：管理员维护 LLM 清单（公网 / 内网自建两类，见 doc 19 的模型配置一节）。
+        # `system:model:test` 刻意单列一个点：它是唯一会拿库里的密钥真发一次请求的接口，
+        # 给"能看能改"的人顺带放开等于给了一条外带探测通道，与其它只读点的信任级不同。
+        _menu("system:model:list", "模型配置", "/system/model", "system/model/index",
+              apis=(("GET", "/api/system/model/list"),), children=(
+                  _btn("system:model:add", "新增",
+                       apis=(("POST", "/api/system/model"),)),
+                  _btn("system:model:edit", "编辑",
+                       apis=(("PUT", "/api/system/model/{model_key}"),)),
+                  _btn("system:model:remove", "删除",
+                       apis=(("DELETE", "/api/system/model/{model_key}"),)),
+                  _btn("system:model:test", "连接测试",
+                       apis=(("POST", "/api/system/model/{model_key}/test"),)),
+              )),
         _menu("system:stats:view", "全局统计", "/system/stats", "system/stats/index",
               apis=(("GET", "/api/system/stats/view"),), planned=True),
         _menu("system:audit:list", "审计日志", "/system/audit", "system/audit/index",
@@ -98,21 +114,36 @@ PERMISSIONS: tuple[dict, ...] = (
                        apis=(("PUT", "/api/system/role/{role_id}/permissions"),)),
                   _btn("system:role:edit", "修改数据范围",
                        apis=(("PUT", "/api/system/role/{role_id}"),)),
-                  # 端点写在 dept_routes.py 的 `/user/*` 面下（给用户挂角色），
-                  # 点归角色命名空间 —— 与 system:dept:assign 同一个切法（doc 19-4.2 表 33 行）。
-                  _btn("system:role:assign", "分配用户",
-                       apis=(("PUT", "/api/system/user/{user_id}/roles"),)),
               )),
         _menu("system:dept:list", "部门管理", "/system/dept", "system/dept/index",
               apis=(("GET", "/api/system/dept/list"),), children=(
-                  _btn("system:dept:add", "新增",
+                  # 顶级与子部门其实是同一支 `POST /dept`，靠请求体里的 `parent_id == 0`
+                  # 分流。路由依赖看不到请求体，所以依赖按「任一即可」放行、handler 里
+                  # 再按 parent_id 挑一次点（dept_routes.create_dept）。
+                  _btn("system:dept:addRoot", "新建顶级部门",
                        apis=(("POST", "/api/system/dept"),)),
-                  _btn("system:dept:edit", "编辑",
+                  _btn("system:dept:addChild", "新建子部门",
+                       apis=(("POST", "/api/system/dept"),)),
+                  # 建号在用户管理页也有控件（system:user:add），两页是同一支 API。
+                  # 但部门页那个「添加用户」是这一页的控件，所以另给一个点 ——
+                  # 两点任一即可加人，不是两个后端行为。
+                  _btn("system:dept:addUser", "添加用户",
+                       apis=(("POST", "/api/system/user"),)),
+                  _btn("system:dept:edit", "改名",
                        apis=(("PUT", "/api/system/dept/{dept_id}"),)),
                   _btn("system:dept:remove", "删除",
                        apis=(("DELETE", "/api/system/dept/{dept_id}"),)),
-                  _btn("system:dept:assign", "分配成员",
+                  # 挪人与挂角色这两件事，部门页和用户管理页都有控件，于是共用同一批点、
+                  # 同一支 API（`user_routes.py`）—— 同一件事不开两个点，开了两页的可见性
+                  # 就会各走各的。点挂在哪一页的菜单下，看的是这一页有没有那个控件。
+                  # 建号时 body 带 `role_ids` 也归 `system:role:assign`：那道闸在 handler 里
+                  # （`assert_permission`），**不写进 `apis`** —— 这一支 POST 的依赖是
+                  # 「add / addUser 任一即可」，把 role:assign 加进依赖会让只有换角色权限的人
+                  # 也能建号；写进 `apis` 又会让启动对账多一处漂移告警（它只比对依赖级引用）。
+                  _btn("system:dept:assign", "所属部门",
                        apis=(("PUT", "/api/system/user/{user_id}/dept"),)),
+                  _btn("system:role:assign", "角色",
+                       apis=(("PUT", "/api/system/user/{user_id}/roles"),)),
               )),
     )),
     # ── 纯前端入口：没有后端 API，只在 agent-client 侧边栏里决定显不显示（doc 19-4.2）──
@@ -120,8 +151,11 @@ PERMISSIONS: tuple[dict, ...] = (
     _menu("client:mcp:config", "MCP 配置"),
     _menu("client:memory:config", "记忆配置"),
     _menu("client:expert:config", "专家和专家团"),
+    # 系统管理那一组的入口（用户 / 角色 / 部门 / 模型）连着写：同一组的先后就是页签先后
+    _menu("client:user:config", "用户管理"),
     _menu("client:rbac:config", "角色权限配置"),
     _menu("client:dept:config", "部门配置"),
+    _menu("client:model:config", "模型配置"),
 )
 
 

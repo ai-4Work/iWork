@@ -6,7 +6,7 @@ from typing import Optional
 
 from sqlalchemy import (
     String, Text, Integer, BigInteger, SmallInteger, Boolean, DateTime, ForeignKey,
-    UniqueConstraint, Index, func, text, true as sa_true,
+    Float, UniqueConstraint, Index, func, text, true as sa_true, false as sa_false,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -1732,3 +1732,167 @@ class OrmPermissionApi(Base):
     __table_args__ = (
         {"comment": "权限点-API 映射表：三列共同主键"},
     )
+
+
+# ═══════════════════════════════════════════════════════════════
+# 15. LLM 模型配置
+# ═══════════════════════════════════════════════════════════════
+
+class OrmLlmModel(Base):
+    """LLM 模型配置表：管理员在「系统管理 → 模型配置」维护的可选模型清单。
+
+    一条记录 = 一个模型，自带厂商、协议、端点与能力参数 —— 引擎按这些字段决定
+    装配哪个客户端、请求体里塞什么、上下文窗口按多大算，不再依赖全局 settings。
+
+    `deployment_type` 区分公网模型与内网自建模型：前者 key 必填、有单价与配额，
+    后者常无 key、且受单机显存限制需要并发闸门。两者共用同一张表，差异只落在
+    管理页的字段显隐与校验上。
+
+    `api_key_enc` 是 Fernet 密文，**刻意不出现在 `to_dict()` 里**；对外只暴露
+    `has_api_key` 与 `api_key_hint`（形如 `sk-ab…a1b2`）。
+    """
+
+    __tablename__ = "llm_model"
+
+    id: Mapped[int] = mapped_column(
+        BigInteger, primary_key=True, autoincrement=True, comment="自增主键",
+    )
+    model_key: Mapped[str] = mapped_column(
+        String(50), nullable=False, unique=True,
+        comment="模型唯一标识；聊天下拉与消息的 model 字段存的就是它",
+    )
+    display_name: Mapped[str] = mapped_column(
+        String(200), nullable=False, comment="显示名（下拉里给用户看的）",
+    )
+    deployment_type: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="public", server_default="public",
+        comment="部署类型：public 公网 | intranet 内网自建",
+    )
+    protocol: Mapped[str] = mapped_column(
+        String(30), nullable=False, default="openai_compatible",
+        server_default="openai_compatible",
+        comment="协议：openai_compatible | anthropic；决定装配哪个客户端类",
+    )
+    vendor: Mapped[str] = mapped_column(
+        String(50), nullable=False, default="", server_default="",
+        comment="厂商，仅用于分组与图标，不参与逻辑",
+    )
+    model_api_name: Mapped[str] = mapped_column(
+        String(200), nullable=False,
+        comment="请求体里真正传的模型名（如 vLLM 的 served-model-name）",
+    )
+    base_url: Mapped[str] = mapped_column(
+        String(500), nullable=False, default="", server_default="",
+        comment="接口根地址；客户端自行拼 /v1/chat/completions",
+    )
+    api_key_enc: Mapped[Optional[str]] = mapped_column(
+        Text, comment="API Key 的 Fernet 密文；主密钥在本地 .env（IWORK_MODEL_API_KEY_ENCRYPTION_KEY）",
+    )
+    api_key_hint: Mapped[str] = mapped_column(
+        String(50), nullable=False, default="", server_default="",
+        comment="掩码预览（如 sk-ab…a1b2），供管理页显示；不含明文信息",
+    )
+    timeout_seconds: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=120, server_default="120",
+        comment="单次请求超时（秒）；内网自建有冷启动与排队，需要调大",
+    )
+    max_retries: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=3, server_default="3",
+        comment="网络异常 / 429 / 502 / 503 的自动重试次数",
+    )
+    extra_body: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default="{}",
+        comment="透传进请求体的额外字段（如 vLLM 的 chat_template_kwargs）",
+    )
+    context_window: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=65536, server_default="65536",
+        comment="上下文窗口（模型能力声明）；未配绝对压缩阈值时按它折算触发线",
+    )
+    compress_threshold_tokens: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        comment="上下文压缩触发线（绝对 token 数）；留空 = 按 context_window 折（build 80% / ask 55%）",
+    )
+    max_output_tokens: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=20000, server_default="20000",
+        comment="单次输出上限；同时是截断续写的推断阈值",
+    )
+    supports_tools: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=sa_true(),
+        comment="是否支持 function calling；false 时请求体不带 tools",
+    )
+    supports_thinking: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=sa_false(),
+        comment="是否支持思考；false 时请求体不带 thinking 字段（部分端点会 400）",
+    )
+    thinking_budget_tokens: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=4096, server_default="4096",
+        comment="思考预算 token 数",
+    )
+    max_concurrency: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+        comment="并发上限；0=不限。内网单机 GPU 必须设，否则并发流式会打爆显存",
+    )
+    price_input_per_1m: Mapped[Optional[float]] = mapped_column(
+        Float, comment="每 1M 输入 token 单价；内网模型留空表示不计费",
+    )
+    price_output_per_1m: Mapped[Optional[float]] = mapped_column(
+        Float, comment="每 1M 输出 token 单价；内网模型留空表示不计费",
+    )
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=sa_true(),
+        comment="是否启用；停用后不出现在下拉里",
+    )
+    remark: Mapped[str] = mapped_column(
+        Text, nullable=False, default="", server_default="", comment="备注",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(),
+        comment="创建时间",
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(),
+        comment="最后更新时间",
+    )
+
+    __table_args__ = (
+        {"comment": "LLM 模型配置表：管理员维护的可选模型清单，引擎按行解析客户端与能力参数"},
+    )
+
+    def to_dict(self) -> dict:
+        """管理面视图。**刻意不含 `api_key_enc`** —— 密钥密文一律不出接口。"""
+        return {
+            "model_key": self.model_key,
+            "display_name": self.display_name,
+            "deployment_type": self.deployment_type,
+            "protocol": self.protocol,
+            "vendor": self.vendor,
+            "model_api_name": self.model_api_name,
+            "base_url": self.base_url,
+            "has_api_key": bool(self.api_key_enc),
+            "api_key_hint": self.api_key_hint,
+            "timeout_seconds": self.timeout_seconds,
+            "max_retries": self.max_retries,
+            "extra_body": dict(self.extra_body or {}),
+            "context_window": self.context_window,
+            "compress_threshold_tokens": self.compress_threshold_tokens,
+            "max_output_tokens": self.max_output_tokens,
+            "supports_tools": self.supports_tools,
+            "supports_thinking": self.supports_thinking,
+            "thinking_budget_tokens": self.thinking_budget_tokens,
+            "max_concurrency": self.max_concurrency,
+            "price_input_per_1m": self.price_input_per_1m,
+            "price_output_per_1m": self.price_output_per_1m,
+            "enabled": self.enabled,
+            "remark": self.remark,
+        }
+
+    def to_engine_dict(self) -> dict:
+        """引擎内部视图：`to_dict()` + `api_key_enc`（Fernet 密文）。
+
+        **只给 `ModelResolver` 用。** 单独开这个方法是刻意的：密钥密文的读取路径只有
+        一条、且名字里带着 engine，接口层想误用 `to_dict()` 也拿不到密文，
+        想误把本方法的返回值直接 return 出去也会因为名字显眼而被 review 拦住。
+        """
+        data = self.to_dict()
+        data["api_key_enc"] = self.api_key_enc
+        return data

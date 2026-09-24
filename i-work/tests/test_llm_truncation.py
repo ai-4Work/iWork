@@ -11,7 +11,7 @@ import json
 
 import pytest
 
-from server.llm.client import DeepSeekLLMClient
+from server.llm.client import OpenAICompatLLMClient
 
 
 class _FakeResponse:
@@ -51,8 +51,8 @@ def _sse(obj: dict) -> str:
     return "data: " + json.dumps(obj)
 
 
-def _make_client(lines) -> DeepSeekLLMClient:
-    client = DeepSeekLLMClient(api_key="k", model="deepseek-v4-pro")
+def _make_client(lines) -> OpenAICompatLLMClient:
+    client = OpenAICompatLLMClient(api_key="k", model="deepseek-v4-pro")
     client._client = _FakeHttpClient(lines)
     return client
 

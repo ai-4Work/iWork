@@ -411,19 +411,47 @@ async def test_compress_triggers_offload():
     assert len(await repo.list_by_session(sid)) > 0  # 有块被卸载落库
 
 
+def _eight_turns() -> list[dict]:
+    """8 轮 ≈ 736 token 的一段历史（见下面两条阈值用例）。"""
+    messages: list[dict] = []
+    for _ in range(8):
+        messages.append({"role": "user", "content": "x" * 100})
+        messages.append({"role": "assistant", "content": "y" * 100})
+    return messages
+
+
 @pytest.mark.asyncio
 async def test_compress_ask_vs_build_threshold():
     comp = make_comp(config=CompressionConfig(model_context_limit=1000))
-    messages = []
-    for i in range(8):
-        messages.append({"role": "user", "content": "x" * 100})
-        messages.append({"role": "assistant", "content": "y" * 100})
+    messages = _eight_turns()
     # 8 轮 total ≈ 736，落在 550(0.55) 与 800(0.80) 之间
     _, report_ask = await comp.compress(str(uuid4()), messages, current_turn=8, mode="ask")
     _, report_build = await comp.compress(str(uuid4()), messages, current_turn=8, mode="build")
     assert report_ask.compressed is True
     assert report_build.compressed is False
     assert report_build.reason == "under_threshold"
+
+
+@pytest.mark.asyncio
+async def test_compress_explicit_threshold_overrides_window_ratio():
+    """配了绝对阈值就以它为准 —— 包括不再乘 mode 的 0.55/0.80。"""
+    comp = make_comp(config=CompressionConfig(model_context_limit=1000))
+    messages = _eight_turns()  # ≈ 736 token
+
+    # 阈值 600 < 736：build 模式（默认 0.80×1000=800 会放过）也压
+    _, low = await comp.compress(
+        str(uuid4()), messages, current_turn=8, mode="build",
+        compress_threshold_tokens=600,
+    )
+    assert low.compressed is True
+
+    # 阈值 900 > 736：ask 模式（默认 0.55×1000=550 会压）也不压
+    _, high = await comp.compress(
+        str(uuid4()), messages, current_turn=8, mode="ask",
+        compress_threshold_tokens=900,
+    )
+    assert high.compressed is False
+    assert high.reason == "under_threshold"
 
 
 def test_blocks_to_messages():

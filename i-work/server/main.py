@@ -1,6 +1,7 @@
 from __future__ import annotations
 import asyncio
 import logging
+import os
 import time
 from contextlib import asynccontextmanager
 
@@ -11,7 +12,6 @@ from fastapi import FastAPI, Request
 from fastapi.responses import Response, PlainTextResponse
 
 from server.config import settings, validate_auth_config
-from server.llm.client import FakeLLMClient
 from server.engine.query_loop import EngineManager
 
 # ── 可观测性：structlog 替代原有 logging.basicConfig ──
@@ -57,6 +57,7 @@ async def lifespan(app: FastAPI):
     from server.db.engine import create_engine
     from server.db.seed import (
         seed_hub_data, seed_expert_hub_data, seed_rbac, seed_dept,
+        seed_llm_models,
     )
     from server.storage.postgres import (
         PgSessionRepo, PgMessageRepo,
@@ -83,6 +84,9 @@ async def lifespan(app: FastAPI):
     # 部门：默认部门 + 存量用户归属回填（doc 19-2.2）。必须在 seed_rbac 之后 ——
     # 首批管理员账号是上一步建的，跑早了它第一次会漏掉回填。
     await seed_dept(session_factory)
+    # LLM 模型：把 .env 的单模型配置迁成 llm_model 的首行。要在装配解析器之前 ——
+    # 解析器查不到任何模型时只能回落默认，而那时默认也是空的。
+    await seed_llm_models(session_factory)
 
     # ── 2.5 认证 ──
     from server.auth.service import AuthService
@@ -97,18 +101,40 @@ async def lifespan(app: FastAPI):
     session_repo = PgSessionRepo(session_factory)
     message_repo = PgMessageRepo(session_factory)
 
-    # ── 4. LLM client ──
-    if settings.llm_provider == "deepseek" and settings.deepseek_api_key:
-        from server.llm.client import DeepSeekLLMClient
-        llm = DeepSeekLLMClient()
-        logger.info("LLM provider: deepseek  model=%s", settings.default_model)
-    elif settings.anthropic_api_key:
-        from server.llm.client import AnthropicLLMClient
-        llm = AnthropicLLMClient()
-        logger.info("LLM provider: anthropic  model=%s", settings.default_model)
-    else:
-        llm = FakeLLMClient()
-        logger.warning("No API key configured, using FakeLLMClient")
+    # ── 4. 模型解析器 ──
+    # 不再"按 provider 三选一造一个客户端"：每个模型自己带协议与参数，解析器按
+    # `llm_model` 表逐条装配。库里一条启用项都没有时（没跑种子 / 全被停用）它自己
+    # 回落到 .env 的单模型配置，行为与改造前一致。
+    from server.llm.resolver import ModelResolver
+    from server.storage.postgres import LlmModelRepo
+
+    model_repo = LlmModelRepo(session_factory)
+    model_resolver = ModelResolver(model_repo)
+    app.state.model_resolver = model_resolver
+    default_resolved = await model_resolver.resolve()
+    # 兜底客户端只喂给 `EngineManager` 的位置参数 —— 引擎拿到 resolver 后自己不查它。
+    llm = default_resolved.client
+    logger.info(
+        "LLM 装配  默认模型=%s  协议=%s  启用模型数=%d",
+        default_resolved.model_key or "(未配置)", default_resolved.protocol,
+        len(await model_repo.list_enabled_options()),
+    )
+    # 旧名守卫：改过名的变量会被静默忽略（`extra="allow"`），表现是"明明配了却还是
+    # 未配置"，而库里已存的密文会全部解不开（→ 空密钥 → 401）。远端那份 .env 靠手工
+    # 同步、最容易漏改，所以在这里点名。
+    # 读 os.environ 而不是 settings：模块头的 load_dotenv() 已把 .env 灌了进去，
+    # 于是 .env 与进程环境变量两种来源都覆盖得到（pydantic 只把 dotenv 的额外项放进
+    # model_extra，键名还是原变量名小写，不如这条直白）。
+    if os.environ.get("IWORK_SECRET_KEY"):
+        logger.warning(
+            "IWORK_SECRET_KEY 已改名为 IWORK_MODEL_API_KEY_ENCRYPTION_KEY，"
+            "旧变量不会再被读取；库里已存密文的模型会解不出密钥"
+        )
+    if not settings.model_api_key_encryption_key:
+        logger.warning(
+            "IWORK_MODEL_API_KEY_ENCRYPTION_KEY 未配置：经管理页保存模型 API Key 会被拒绝，"
+            "密钥只能继续写在 .env 里。生成命令见 .env.example"
+        )
 
     # ── 5. Skill 注册中心 ──
     from server.skills.skill_registry import SkillRegistry
@@ -142,15 +168,12 @@ async def lifespan(app: FastAPI):
             per_memory_chars=settings.l1_recall_per_memory_chars,
         )
 
-        # 抽取与去重走"便宜模型"档，与主模型解耦（同压缩的选法）
+        # 抽取与去重走"便宜模型"档，与主模型解耦（同压缩的选法）。
+        # 一律经解析器：留空或填了个库里没有的模型名都会回落到默认模型并打一次 warning。
+        # 改造前这里是 `if provider == "anthropic"` 才另建客户端，于是 provider=deepseek
+        # 时 `l1_extraction_model` / `compression_model` 全都不生效（静默用主模型）。
         extraction_model = settings.l1_extraction_model or settings.compression_model
-        if settings.llm_provider == "anthropic":
-            from server.llm.client import AnthropicLLMClient
-            l1_llm = AnthropicLLMClient(
-                api_key=settings.anthropic_api_key, model=extraction_model,
-            )
-        else:
-            l1_llm = llm
+        l1_llm = (await model_resolver.resolve(extraction_model)).client
 
         scheduler = L1Scheduler(
             session_repo=session_repo,
@@ -202,13 +225,7 @@ async def lifespan(app: FastAPI):
             or settings.l1_extraction_model
             or settings.compression_model
         )
-        if settings.llm_provider == "anthropic":
-            from server.llm.client import AnthropicLLMClient
-            l2_llm = AnthropicLLMClient(
-                api_key=settings.anthropic_api_key, model=consolidation_model,
-            )
-        else:
-            l2_llm = llm
+        l2_llm = (await model_resolver.resolve(consolidation_model)).client
 
         l2_scheduler = L2Scheduler(
             memory_repo=l1_repo,
@@ -255,13 +272,7 @@ async def lifespan(app: FastAPI):
             or settings.l1_extraction_model
             or settings.compression_model
         )
-        if settings.llm_provider == "anthropic":
-            from server.llm.client import AnthropicLLMClient
-            l3_llm = AnthropicLLMClient(
-                api_key=settings.anthropic_api_key, model=generation_model,
-            )
-        else:
-            l3_llm = llm
+        l3_llm = (await model_resolver.resolve(generation_model)).client
 
         l3_mode = settings.l3_mode if settings.l3_mode in MODES else MODE_CHAT
         l3_scheduler = L3Scheduler(
@@ -287,6 +298,7 @@ async def lifespan(app: FastAPI):
         memory_recall=memory_recall,
         scene_recall=scene_recall,
         persona_recall=persona_recall,
+        resolver=model_resolver,
     )
     stream_subscriber.set_engine_manager(app.state.engine_manager)
     logger.info("iWork Server started")
@@ -300,6 +312,8 @@ async def lifespan(app: FastAPI):
             await task
         except asyncio.CancelledError:
             pass
+    # 关掉解析器持有的 httpx 连接池；不等退休队列的宽限期，直接全关。
+    await model_resolver.aclose()
     await engine.dispose()
 
 
@@ -340,9 +354,14 @@ from server.api.agent_routes import router_agents
 from server.api.auth_routes import router_auth
 from server.api.system_routes import router_system
 from server.api.dept_routes import router_dept
+from server.api.user_routes import router_user
+from server.api.model_routes import router_model, router_models
 app.include_router(router_auth)
 app.include_router(router_system)
 app.include_router(router_dept)
+app.include_router(router_user)
+app.include_router(router_model)
+app.include_router(router_models)
 app.include_router(router_agents)
 app.include_router(router_sessions)
 app.include_router(router)

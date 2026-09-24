@@ -16,14 +16,29 @@ class TokenCounter:
     - DeepSeek (Chinese-heavy): ~2.5 chars per token
     - Anthropic (English-heavy): ~3.5 chars per token
 
+    These two are only the *initial* baseline. Once a model is known, the
+    caller feeds the real ratio in via `use_model()` — the resolver computes
+    it per model, so this counter must not be pinned to one vendor at
+    construction time.
+
     A 15% safety margin is applied to avoid underestimation at API boundaries.
     """
 
-    def __init__(self, provider: str) -> None:
+    def __init__(self, provider: str = "deepseek") -> None:
         self._provider = provider
         self._chars_per_token = 2.5 if provider == "deepseek" else 3.5
         self._safety_margin = 1.15
         self._calibrated_ratio: float | None = None
+
+    def use_model(self, chars_per_token: float) -> None:
+        """Switch the baseline ratio to the current model's characteristic.
+
+        Deliberately keeps `_calibrated_ratio`: that number came from real
+        usage data and beats any constant, so switching models must not throw
+        it away (switching back would otherwise lose the calibration).
+        """
+        if chars_per_token > 0:
+            self._chars_per_token = chars_per_token
 
     @property
     def chars_per_token(self) -> float:

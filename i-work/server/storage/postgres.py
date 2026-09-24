@@ -24,6 +24,7 @@ from server.db.models import (
     OrmExpertHub, OrmExpertTeamHub, OrmOffloadedBlock, OrmToolInvocation,
     OrmL1Memory, OrmL1Checkpoint, OrmL2Scene, OrmL2Checkpoint, OrmL3Persona,
     OrmRole, OrmPermission, OrmUserRole, OrmRolePermission, OrmDept,
+    OrmLlmModel,
 )
 
 
@@ -303,6 +304,43 @@ class UserRepo:
             else:
                 stmt = stmt.where(OrmUser.id == actor_id)
             return list((await db.execute(stmt)).scalars())
+
+    # ── 管理侧的三个字段写入（doc 19-4.2 的第 4–7 行）─────
+    # 三个都吃调用方算好的值，不做校验：范围与取值在 user_routes 里判过了，
+    # 这里连"用户存不存在"都不查 —— 路由那边 `_target_in_scope` 已经取过一次。
+
+    async def update_display_name(self, user_id: _uuid.UUID, display_name: str) -> bool:
+        return await self._update_fields(user_id, display_name=display_name)
+
+    async def set_status(self, user_id: _uuid.UUID, status: str) -> bool:
+        return await self._update_fields(user_id, status=status)
+
+    async def set_password_hash(self, user_id: _uuid.UUID, password_hash: str) -> bool:
+        """换密码哈希，顺带把失败计数与锁定期一起清零。
+
+        与 `clear_lock` 是同一种写法的两处入口，共用 `_update_fields`：
+        重设密码就是一次干净的开始，不清的话新密码第一次登录还撞在锁定期上
+        （与登录成功清锁同口径，doc 18-3.3）。
+        """
+        return await self._update_fields(
+            user_id, password_hash=password_hash,
+            failed_login_count=0, locked_until=None,
+        )
+
+    async def clear_lock(self, user_id: _uuid.UUID) -> bool:
+        """解锁：人工解除卡在 `locked_until` 上的那 15 分钟（doc 18-3.3）。"""
+        return await self._update_fields(
+            user_id, failed_login_count=0, locked_until=None,
+        )
+
+    async def _update_fields(self, user_id: _uuid.UUID, **values) -> bool:
+        values["updated_at"] = datetime.now(timezone.utc)
+        async with self._sf() as db:
+            result = await db.execute(
+                update(OrmUser).where(OrmUser.id == user_id).values(**values)
+            )
+            await db.commit()
+            return bool(result.rowcount)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1931,3 +1969,125 @@ class DeptRepo:
             )
             await db.commit()
             return int(result.rowcount or 0)
+
+
+# ═══════════════════════════════════════════════════════════════
+# LlmModelRepo
+# ═══════════════════════════════════════════════════════════════
+
+# create / update 可写入的业务列（不含 id、model_key、时间戳）。
+# 抽成元组是为了让两个方法共用同一个字段清单 —— 逐个手写两份，
+# 加一个列时漏掉其中一处，症状是"新增能填、编辑改不动"这种很难察觉的静默失败。
+# 注意 `model_key` 刻意不在其中：它是会话和消息表里存的业务键，
+# 改它等于让存量会话解析不到模型，所以只作为主键出现在路径参数里。
+_LLM_MODEL_WRITABLE = (
+    "display_name", "deployment_type", "protocol", "vendor", "model_api_name",
+    "base_url", "api_key_enc", "api_key_hint", "timeout_seconds", "max_retries",
+    "extra_body", "context_window", "compress_threshold_tokens",
+    "max_output_tokens", "supports_tools",
+    "supports_thinking", "thinking_budget_tokens", "max_concurrency",
+    "price_input_per_1m", "price_output_per_1m", "enabled", "remark",
+)
+
+
+class LlmModelRepo:
+    """`llm_model` 表的读写。
+
+    两个视图分得很开，不要混用：
+
+    * 管理面（`list_all` / `get_by_key`）→ `to_dict()`，**不含密钥密文**。
+    * 引擎面（`load_engine_configs`）→ `to_engine_dict()`，**含密钥密文**，
+      只给 `ModelResolver` 用，返回值绝不能出接口。
+    """
+
+    def __init__(self, session_factory: async_sessionmaker[AsyncSession]):
+        self._sf = session_factory
+
+    async def list_all(self) -> list[dict]:
+        """管理页全量列表，含已停用项。"""
+        async with self._sf() as db:
+            result = await db.execute(
+                select(OrmLlmModel).order_by(OrmLlmModel.id)
+            )
+            return [row.to_dict() for row in result.scalars()]
+
+    async def list_enabled_options(self) -> list[dict]:
+        """聊天模型下拉的候选：只回启用项，且只回下拉需要的字段。
+
+        刻意不返回上下文窗口、单价这些 —— 下拉不需要，少给一点少一处泄露面。
+        """
+        async with self._sf() as db:
+            result = await db.execute(
+                select(OrmLlmModel)
+                .where(OrmLlmModel.enabled.is_(True))
+                .order_by(OrmLlmModel.id)
+            )
+            return [
+                {
+                    "model_key": row.model_key,
+                    "display_name": row.display_name,
+                    "deployment_type": row.deployment_type,
+                }
+                for row in result.scalars()
+            ]
+
+    async def get_by_key(self, model_key: str) -> dict | None:
+        """管理面单条查询，不含密钥密文。"""
+        async with self._sf() as db:
+            result = await db.execute(
+                select(OrmLlmModel).where(OrmLlmModel.model_key == model_key)
+            )
+            row = result.scalar_one_or_none()
+            return row.to_dict() if row else None
+
+    async def load_engine_configs(self) -> list[dict]:
+        """引擎面全量配置（**含 `api_key_enc` 密文**）。
+
+        解析器在缓存失效后调一次，拿到的是全部行（含停用）—— 它要自己按
+        `enabled` 决定候选，还要能在请求的模型被停用时给出像样的回落。
+        """
+        async with self._sf() as db:
+            result = await db.execute(
+                select(OrmLlmModel).order_by(OrmLlmModel.id)
+            )
+            return [row.to_engine_dict() for row in result.scalars()]
+
+    async def create(self, model_key: str, entry: dict) -> dict:
+        """新增。`display_name` 与 `model_api_name` 由调用方保证非空（路由层校验）。"""
+        async with self._sf() as db:
+            orm = OrmLlmModel(
+                model_key=model_key,
+                **{k: entry[k] for k in _LLM_MODEL_WRITABLE if k in entry},
+            )
+            db.add(orm)
+            await db.commit()
+            return orm.to_dict()
+
+    async def update(self, model_key: str, entry: dict) -> bool:
+        """按 model_key 局部更新。缺失的键保持原值，返回是否命中。"""
+        async with self._sf() as db:
+            result = await db.execute(
+                select(OrmLlmModel).where(OrmLlmModel.model_key == model_key)
+            )
+            row = result.scalar_one_or_none()
+            if row is None:
+                return False
+            for key in _LLM_MODEL_WRITABLE:
+                if key in entry:
+                    setattr(row, key, entry[key])
+            row.updated_at = datetime.now(timezone.utc)
+            await db.commit()
+            return True
+
+    async def delete(self, model_key: str) -> bool:
+        """删除，返回是否命中。存量会话里残留的旧 model_key 由解析器回落处理。"""
+        async with self._sf() as db:
+            result = await db.execute(
+                select(OrmLlmModel).where(OrmLlmModel.model_key == model_key)
+            )
+            row = result.scalar_one_or_none()
+            if row is None:
+                return False
+            await db.delete(row)
+            await db.commit()
+            return True
