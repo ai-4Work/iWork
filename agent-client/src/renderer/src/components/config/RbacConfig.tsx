@@ -68,8 +68,20 @@ function rowState(row: Row, selected: Set<number>): 'checked' | 'unchecked' | 'i
 }
 
 export function RbacConfig() {
-  // 改数据范围走的是另一个权限点（system:role:edit），勾选与它各管各的
+  /** 勾选与「保存」都归 `system:role:grant`；改数据范围归 `system:role:edit`。
+   *  两个点各管自己那一半、任一即可出「保存」—— 单授 edit 的人也能把范围改下去
+   *  （只授一个就只提交那一半，见 `handleSave`）。 */
+  const canGrant = usePermi('system:role:grant')
   const canEditScope = usePermi('system:role:edit')
+  /** 矩阵的两条读取依赖：权限点清单 + 各角色已授权。缺任一条整页都画不出来，
+   *  与部门页的 `canSeeRoles` 同一手法 —— 没权限就不发请求，403 会让整页只剩一句报错。
+   *  拆成两条是为了提示能说清缺的是哪一个。 */
+  const canSeePerms = usePermi('system:permission:list')
+  const canQueryGrants = usePermi('system:role:query')
+  const missingReads = [
+    !canSeePerms && '查看权限点清单',
+    !canQueryGrants && '查看授权',
+  ].filter(Boolean).join('、')
   const [roles, setRoles] = useState<RbacRole[]>([])
   const [perms, setPerms] = useState<RbacPermission[]>([])
   /** 服务端已保存的授权，脏标记对着它比 */
@@ -91,6 +103,11 @@ export function RbacConfig() {
   }, [])
 
   const load = async () => {
+    // 读取依赖缺了就一个请求都不发：拦下来的是 403，只会让整页糊成"清单为空"
+    if (missingReads) {
+      setLoading(false)
+      return
+    }
     setLoading(true)
     try {
       const [roleRes, permRes] = await Promise.all([fetchRoles(), fetchPermissions()])
@@ -158,11 +175,12 @@ export function RbacConfig() {
     setSaving(true)
     try {
       for (const role of changedRoles) {
-        if (role.data_scope !== scopeDraft[role.id]) {
+        // 两个点各管自己那一半：没授权的那一半不发（按钮出现不代表两样都能改）
+        if (canEditScope && role.data_scope !== scopeDraft[role.id]) {
           await setRoleDataScope(role.id, scopeDraft[role.id])
         }
         // 短路角色的授权行不存在也不可写，只提交数据范围
-        if (!isAllPermsRole(role.role_key)) {
+        if (canGrant && !isAllPermsRole(role.role_key)) {
           const ids = [...(draft[role.id] ?? [])]
           await grantRolePermissions(role.id, ids)
         }
@@ -181,6 +199,13 @@ export function RbacConfig() {
   if (loading) {
     return <div className="text-[13px] text-[#64748b]">加载中…</div>
   }
+  if (missingReads) {
+    return (
+      <div className="text-[13px] text-[#64748b]">
+        矩阵靠「查看权限点清单」与「查看授权」两个权限点读出来，你缺：{missingReads}。
+      </div>
+    )
+  }
   if (rows.length === 0) {
     return <div className="text-[13px] text-[#64748b]">权限点清单为空，检查服务端是否已完成 catalog 对账。</div>
   }
@@ -191,10 +216,11 @@ export function RbacConfig() {
         <div className="flex-1 text-[12px] text-[#64748b] leading-relaxed">
           勾选即授权，父行连带其下全部子项。超管与管理员两列只读恒勾选 ——
           它们在服务端短路为全集，以后新增权限点自动拥有，两者只差一个数据范围。
-          保存只提交有改动的角色。
+          保存只提交有改动的角色，也只提交你有权限写的那一半（勾选归「修改授权」、
+          数据范围归「修改数据范围」）。
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
-          <Permi perms="system:role:grant">
+          <Permi perms={['system:role:grant', 'system:role:edit']}>
             <button
               onClick={handleSave}
               disabled={!dirty || saving}
@@ -280,6 +306,11 @@ export function RbacConfig() {
                   const state = locked
                     ? 'checked'
                     : rowState(row, draft[role.id] ?? new Set<number>())
+                  // 勾选归「修改授权」：缺它的人勾得动却存不下（没有「保存」），干脆不给勾
+                  const readonly = locked || !canGrant
+                  const title = locked
+                    ? `${role.role_key} 短路为全集，不可编辑`
+                    : canGrant ? undefined : '没有「修改授权」权限点'
                   return (
                     <td
                       key={role.id}
@@ -287,8 +318,8 @@ export function RbacConfig() {
                     >
                       <TriCheckbox
                         state={state}
-                        disabled={locked}
-                        title={locked ? `${role.role_key} 短路为全集，不可编辑` : undefined}
+                        disabled={readonly}
+                        title={title}
                         onChange={() => toggle(role.id, row)}
                       />
                     </td>

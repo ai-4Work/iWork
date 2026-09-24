@@ -91,7 +91,7 @@ export function MessageList({ scrollContainerRef }: Props) {
     return (
       <div className="flex-1 flex items-center justify-center">
         <div className="flex flex-col items-center text-center gap-3">
-          <div className="w-14 h-14 rounded-[14px] bg-[#a7f3d0] text-white flex items-center justify-center text-[32px] font-bold">✓</div>
+          <div className="w-14 h-14 rounded-[14px] bg-[#10b981] text-white flex items-center justify-center text-[32px] font-bold">✓</div>
           <h2 className="text-[22px] font-semibold text-[#0f172a] tracking-[-0.4px]">iWork，您的AI工作助手</h2>
           <div className="flex gap-2 flex-wrap justify-center">
             <button

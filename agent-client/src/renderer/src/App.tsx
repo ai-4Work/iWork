@@ -36,6 +36,9 @@ export default function App() {
       configStore.connectInstalledMcps()
     })
     configStore.loadInstalledSkills()
+    // 聊天下拉的模型候选。只要求登录，所以放在这一块里（早于任何权限判定）——
+    // 管理员改完模型清单，下次登录/重连就带上新的了。
+    configStore.loadModels()
   }, [status])
 
   if (status === 'loading') {

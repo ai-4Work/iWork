@@ -1507,6 +1507,9 @@ export interface DeptUser {
   /** null = 未分配；正常运行时种子会把所有人回填成默认部门 */
   dept_id: number | null
   status: string
+  /** 自动锁定的到期时间（ISO）；null = 没锁着。用户管理页据此决定「解锁」按钮出不出来。
+   *  到期会自解（doc 18-3.3），所以前端要拿它跟当前时间比，不能只看非空。 */
+  locked_until: string | null
   /** 角色 id；名字拿 `fetchRoles()` 对。正常不会为空（服务端拒空集） */
   role_ids: number[]
 }
@@ -1541,15 +1544,23 @@ export async function createDept(
 }
 
 // POST /system/user —— 管理员建号。部门范围由服务端判（超管任意、部门管理员限本人子树）
+// roleId 传了就是"建号即定角色"（服务端按 system:role:assign 再判一次）；
+// 不传就挂默认角色 —— 字段干脆不出现在 body 里，别让空数组和"没选"混成一种语义。
 export async function createUser(
   username: string,
   password: string,
-  deptId: number
+  deptId: number,
+  roleId?: number | null
 ): Promise<{ id: string; username: string }> {
   const response = await authedFetch(getApiUrl('/system/user'), {
     method: 'POST',
     headers: getAuthHeaders(),
-    body: JSON.stringify({ username, password, dept_id: deptId })
+    body: JSON.stringify({
+      username,
+      password,
+      dept_id: deptId,
+      ...(roleId != null ? { role_ids: [roleId] } : {})
+    })
   })
   if (!response.ok) throw await rbacError(response, '新建用户失败')
   return response.json()
@@ -1603,5 +1614,205 @@ export async function setUserRoles(
     body: JSON.stringify({ role_ids: roleIds })
   })
   if (!response.ok) throw await rbacError(response, '保存角色失败')
+  return response.json()
+}
+
+// PUT /system/user/{user_id} — 改显示名。用户名不给改（是登录标识，也是 login_logs 的审计线索）
+export async function updateUser(
+  userId: string,
+  displayName: string
+): Promise<{ updated: boolean }> {
+  const response = await authedFetch(getApiUrl(`/system/user/${userId}`), {
+    method: 'PUT',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ display_name: displayName })
+  })
+  if (!response.ok) throw await rbacError(response, '保存显示名失败')
+  return response.json()
+}
+
+// PUT /system/user/{user_id}/password — 管理员重置密码（doc 18-3.5）。
+// 服务端会清锁并吊销他手上全部 refresh token，不重签 —— 新会话由他自己登录取。
+export async function resetUserPassword(
+  userId: string,
+  password: string
+): Promise<{ updated: boolean }> {
+  const response = await authedFetch(getApiUrl(`/system/user/${userId}/password`), {
+    method: 'PUT',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ password })
+  })
+  if (!response.ok) throw await rbacError(response, '重置密码失败')
+  return response.json()
+}
+
+// PUT /system/user/{user_id}/status — active | disabled。停用即封号（没有删除档，见 user_routes）
+export async function setUserStatus(
+  userId: string,
+  status: 'active' | 'disabled'
+): Promise<{ updated: boolean }> {
+  const response = await authedFetch(getApiUrl(`/system/user/${userId}/status`), {
+    method: 'PUT',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ status })
+  })
+  if (!response.ok) throw await rbacError(response, '状态修改失败')
+  return response.json()
+}
+
+// PUT /system/user/{user_id}/unlock — 清失败计数与锁定期（doc 18-3.3）。幂等
+export async function unlockUser(userId: string): Promise<{ updated: boolean }> {
+  const response = await authedFetch(getApiUrl(`/system/user/${userId}/unlock`), {
+    method: 'PUT',
+    headers: getAuthHeaders()
+  })
+  if (!response.ok) throw await rbacError(response, '解锁失败')
+  return response.json()
+}
+
+// ===== LLM 模型配置（docs/chapters/19-权限管理RBAC.md 的模型配置一节）=====
+
+/** 聊天下拉的候选项。`GET /models` 只回这三个字段 —— 端点、窗口、单价不出用户面。 */
+export interface LlmModelOption {
+  model_key: string
+  display_name: string
+  /** 页面据此标记「内网」，用户面只是提示，不做过滤 */
+  deployment_type: string
+}
+
+/** 管理面视图，对应 `OrmLlmModel.to_dict()`。
+ *
+ *  **没有明文密钥**，也没有密文 —— 只有 `has_api_key` 与 `api_key_hint`（如 `sk-…9f2c`）。
+ *  拿不到明文是设计如此：响应里出现明文就等于密钥在网络里多走一趟。
+ */
+export interface LlmModelAdmin {
+  model_key: string
+  display_name: string
+  deployment_type: 'public' | 'intranet'
+  protocol: 'openai_compatible' | 'anthropic'
+  vendor: string
+  model_api_name: string
+  base_url: string
+  has_api_key: boolean
+  api_key_hint: string | null
+  timeout_seconds: number
+  max_retries: number
+  extra_body: Record<string, unknown>
+  context_window: number
+  /** 压缩触发线（绝对 token）。null = 未设置，服务端按 context_window 折算 */
+  compress_threshold_tokens: number | null
+  max_output_tokens: number
+  supports_tools: boolean
+  supports_thinking: boolean
+  thinking_budget_tokens: number
+  max_concurrency: number
+  price_input_per_1m: number | null
+  price_output_per_1m: number | null
+  enabled: boolean
+  remark: string
+}
+
+/** 写接口的请求体。字段与服务端 `ModelCreateRequest` / `ModelUpdateRequest` 对齐。
+ *
+ *  `api_key` 的语义分两种：**新增**时给了就加密入库；**编辑**时留空或 null = 不改动
+ *  库里那把 —— 编辑弹窗只显示掩码，用户不动那个框就不该把密钥抹掉。
+ */
+export interface LlmModelPayload {
+  display_name: string
+  deployment_type: 'public' | 'intranet'
+  protocol: 'openai_compatible' | 'anthropic'
+  vendor?: string
+  model_api_name: string
+  base_url?: string
+  api_key?: string | null
+  timeout_seconds?: number
+  max_retries?: number
+  extra_body?: Record<string, unknown>
+  context_window?: number
+  /** 传 null = 改回"按窗口折算"（与单价留空同语义）；不传 = 不改 */
+  compress_threshold_tokens?: number | null
+  max_output_tokens?: number
+  supports_tools?: boolean
+  supports_thinking?: boolean
+  thinking_budget_tokens?: number
+  max_concurrency?: number
+  price_input_per_1m?: number | null
+  price_output_per_1m?: number | null
+  enabled?: boolean
+  remark?: string
+}
+
+/** 连接测试的返回。失败也是一个 200，`ok=false` 带着端点原文 —— 别只看 HTTP 状态。 */
+export interface ModelTestResult {
+  ok: boolean
+  status: number | null
+  model_api_name: string
+  /** ok=true 时是端点回的前若干个字 */
+  sample?: string
+  stop_reason?: string | null
+  /** ok=false 时是报错原文（端口写错 / 密钥不对 / 端点不认 thinking 字段都在这里） */
+  detail?: string
+}
+
+// GET /models —— 用户面，只要求登录。刻意不挂权限点：没有它谁都拉不到模型清单、也就发不出消息。
+export async function fetchModelOptions(): Promise<{ models: LlmModelOption[] }> {
+  const response = await authedFetch(getApiUrl('/models'), { headers: getAuthHeaders() })
+  if (!response.ok) throw await rbacError(response, '模型清单读取失败')
+  return response.json()
+}
+
+// GET /system/model/list —— 管理面，含已停用项
+export async function fetchModelList(): Promise<{ models: LlmModelAdmin[] }> {
+  const response = await authedFetch(getApiUrl('/system/model/list'), { headers: getAuthHeaders() })
+  if (!response.ok) throw await rbacError(response, '模型列表读取失败')
+  return response.json()
+}
+
+// POST /system/model
+export async function createModel(
+  modelKey: string,
+  payload: LlmModelPayload
+): Promise<{ model_key: string }> {
+  const response = await authedFetch(getApiUrl('/system/model'), {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ model_key: modelKey, ...payload })
+  })
+  if (!response.ok) throw await rbacError(response, '新增模型失败')
+  return response.json()
+}
+
+// PUT /system/model/{model_key} —— 局部更新，只改传了的字段
+export async function updateModel(
+  modelKey: string,
+  payload: Partial<LlmModelPayload>
+): Promise<{ updated: boolean }> {
+  const response = await authedFetch(getApiUrl(`/system/model/${encodeURIComponent(modelKey)}`), {
+    method: 'PUT',
+    headers: getAuthHeaders(),
+    body: JSON.stringify(payload)
+  })
+  if (!response.ok) throw await rbacError(response, '保存模型失败')
+  return response.json()
+}
+
+// DELETE /system/model/{model_key}
+export async function deleteModel(modelKey: string): Promise<{ deleted: boolean }> {
+  const response = await authedFetch(getApiUrl(`/system/model/${encodeURIComponent(modelKey)}`), {
+    method: 'DELETE',
+    headers: getAuthHeaders()
+  })
+  if (!response.ok) throw await rbacError(response, '删除模型失败')
+  return response.json()
+}
+
+// POST /system/model/{model_key}/test —— 拿这一行的配置真发一次最小请求
+export async function testModel(modelKey: string): Promise<ModelTestResult> {
+  const response = await authedFetch(
+    getApiUrl(`/system/model/${encodeURIComponent(modelKey)}/test`),
+    { method: 'POST', headers: getAuthHeaders() }
+  )
+  // 404（模型不存在）/ 403 走这里；端点自身的报错是 200 + ok=false，不走这里
+  if (!response.ok) throw await rbacError(response, '连接测试失败')
   return response.json()
 }

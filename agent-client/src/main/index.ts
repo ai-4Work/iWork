@@ -11,6 +11,12 @@ import { registerProxyIpc } from './proxy'
 let mainWindow: BrowserWindow | null = null
 
 function createWindow(): void {
+  // 开发态的窗口标题栏与任务栏图标。打包后 Windows 用的是 exe 自带图标
+  // （electron-builder 从 resources/icon.png 烧进去），而 resources/ 不在
+  // electron-builder.yml 的 files 里、不进 asar，所以只在未打包时给这个路径。
+  // 不设的话 dev 下一直是 Electron 的默认图标。
+  const windowIcon = app.isPackaged ? undefined : join(__dirname, '../../resources/icon.png')
+
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
@@ -18,6 +24,7 @@ function createWindow(): void {
     minHeight: 600,
     show: false,
     titleBarStyle: 'default',
+    icon: windowIcon,
     backgroundColor: '#181825',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),

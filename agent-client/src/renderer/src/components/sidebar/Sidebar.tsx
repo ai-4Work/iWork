@@ -3,7 +3,7 @@ import { useTaskStore } from '../../stores/taskStore'
 import { useChatStore } from '../../stores/chatStore'
 import { activateTask } from '../../stores/persistence'
 import { useAuthStore, hasPermi } from '../../stores/authStore'
-import { ENTRY_VIEWS, CONFIG_TITLES, type ConfigPage } from '../config/pages'
+import { ENTRY_VIEWS, PAGE_PERMS, entryTitle, type ConfigPage, type EntryId } from '../config/pages'
 import { Plus } from 'lucide-react'
 
 interface Props {
@@ -12,14 +12,14 @@ interface Props {
   activeConfig: ConfigPage | null
 }
 
-/** 入口图标。与 `ENTRY_VIEWS` 的 page 一一对应 —— 加页面时两处都要动。 */
-const ENTRY_ICONS: Record<ConfigPage, React.ReactNode> = {
+/** 入口图标。与 `ENTRY_VIEWS` 的 id 一一对应 —— 加条目时两处都要动。 */
+const ENTRY_ICONS: Record<EntryId, React.ReactNode> = {
   skills: <svg className="w-4 h-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="1.5" y="1.5" width="5" height="5" rx="1" /><rect x="9.5" y="1.5" width="5" height="5" rx="1" /><rect x="1.5" y="9.5" width="5" height="5" rx="1" /><rect x="9.5" y="9.5" width="5" height="5" rx="1" /></svg>,
   mcp: <svg className="w-4 h-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="5" cy="5" r="2" /><circle cx="11" cy="11" r="2" /><line x1="6.3" y1="6.3" x2="9.7" y2="9.7" /><line x1="5" y1="13" x2="5" y2="7" /><line x1="11" y1="9" x2="11" y2="3" /></svg>,
   memory: <svg className="w-4 h-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="8" cy="8" r="6" /><path d="M8 6v3M8 11v.01" /></svg>,
   expert: <svg className="w-4 h-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="6" cy="5" r="2" /><circle cx="11" cy="6" r="2" /><circle cx="4" cy="11" r="2" /><circle cx="10" cy="11" r="2" /></svg>,
-  rbac: <svg className="w-4 h-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="7" width="10" height="7" rx="1.5" /><path d="M5.5 7V5a2.5 2.5 0 015 0v2" /></svg>,
-  dept: <svg className="w-4 h-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="6" y="1.5" width="4" height="4" rx="1" /><rect x="1.5" y="10.5" width="4" height="4" rx="1" /><rect x="10.5" y="10.5" width="4" height="4" rx="1" /><path d="M8 5.5v2.5M3.5 10.5V8h9v2.5" /></svg>
+  automation:<svg className="w-4 h-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="8" cy="8" r="2" /><path d="M2 8a6 6 0 0112 0" /><path d="M5 3a6 6 0 015 10" /></svg>,
+  system: <svg className="w-4 h-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="2" y1="4.5" x2="14" y2="4.5" /><line x1="2" y1="11.5" x2="14" y2="11.5" /><circle cx="6" cy="4.5" r="2" /><circle cx="10.5" cy="11.5" r="2" /></svg>
 }
 
 export function Sidebar({ onOpenConfig, onCloseConfig, activeConfig }: Props) {
@@ -42,7 +42,7 @@ export function Sidebar({ onOpenConfig, onCloseConfig, activeConfig }: Props) {
       {/* Brand */}
       <div className="flex items-center gap-2.5 px-2.5 pb-6 text-lg font-bold text-[#0f172a] tracking-[-0.4px]">
         <svg width="30" height="30" viewBox="0 0 30 30" fill="none" className="flex-shrink-0">
-          <rect width="30" height="30" rx="8" fill="#a7f3d0" />
+          <rect width="30" height="30" rx="8" fill="#10b981" />
           <path d="M7 15L13 21L23 9" stroke="#fff" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
         iWork
@@ -62,7 +62,8 @@ export function Sidebar({ onOpenConfig, onCloseConfig, activeConfig }: Props) {
       {/* Config Nav —— 按 section 分组；一组里一条权限都没有，整组连标题一起不渲染 */}
       {sections.map((title) => {
         const entries = ENTRY_VIEWS.filter(
-          (e) => e.section === title && hasPermi(permissions, e.perms)
+          (e) => e.section === title
+            && (e.pages.length === 0 || hasPermi(permissions, e.pages.map((p) => PAGE_PERMS[p])))
         )
         if (entries.length === 0) return null
         return (
@@ -72,23 +73,20 @@ export function Sidebar({ onOpenConfig, onCloseConfig, activeConfig }: Props) {
             </div>
             {entries.map((entry) => (
               <SidebarBtn
-                key={entry.page}
-                icon={ENTRY_ICONS[entry.page]}
-                label={CONFIG_TITLES[entry.page]}
-                active={activeConfig === entry.page}
-                onClick={() => onOpenConfig(entry.page)}
+                key={entry.id}
+                icon={ENTRY_ICONS[entry.id]}
+                label={entryTitle(entry)}
+                active={activeConfig !== null && entry.pages.includes(activeConfig)}
+                onClick={() => {
+                  // 取第一个**有权限**的页：只有部门权限的人，不该点开就落在角色管理上
+                  const first = entry.pages.find((p) => hasPermi(permissions, PAGE_PERMS[p]))
+                  if (first) onOpenConfig(first)
+                }}
               />
             ))}
           </Fragment>
         )
       })}
-
-      {/* 占位：还没有后端能力，也还没有对应的权限点，先给所有人显示 */}
-      <SidebarBtn
-        icon={<svg className="w-4 h-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="8" cy="8" r="2" /><path d="M2 8a6 6 0 0112 0" /><path d="M5 3a6 6 0 015 10" /></svg>}
-        label="自动化"
-        onClick={() => { }}
-      />
 
       {/* Task List */}
       <div className="text-[10px] font-semibold uppercase tracking-[0.6px] text-sidebar-text-dim pt-4 pb-1 px-2.5">

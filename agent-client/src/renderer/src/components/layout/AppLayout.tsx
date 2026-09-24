@@ -9,7 +9,10 @@ import { MemoryConfig } from '../config/MemoryConfig'
 import { ExpertConfig } from '../config/ExpertConfig'
 import { RbacConfig } from '../config/RbacConfig'
 import { DeptConfig } from '../config/DeptConfig'
-import { CONFIG_TITLES, type ConfigPage } from '../config/pages'
+import { UserConfig } from '../config/UserConfig'
+import { ModelConfig } from '../config/ModelConfig'
+import { CONFIG_TITLES, PAGE_PERMS, entryOf, entryTitle, type ConfigPage } from '../config/pages'
+import { useAuthStore, hasPermi } from '../../stores/authStore'
 import { useChatStore } from '../../stores/chatStore'
 import { useTaskStore } from '../../stores/taskStore'
 import { useMultiAgentStore } from '../../stores/multiAgentStore'
@@ -21,6 +24,13 @@ export function AppLayout() {
   const currentTask = useTaskStore((s) => s.getCurrentTask())
   const multiAgentSession = useMultiAgentStore((s) => s.session)
   const showMultiAgent = currentTask?.agentType === 'team' && multiAgentSession !== null
+  const permissions = useAuthStore((s) => s.permissions)
+  const configEntry = configPage ? entryOf(configPage) : undefined
+  const configTitle = configEntry ? entryTitle(configEntry) : ''
+  // 顶部菜单栏的页签：条目的 `pages` 里本人有权限的那些
+  const configTabs = configEntry
+    ? configEntry.pages.filter((p) => hasPermi(permissions, PAGE_PERMS[p]))
+    : []
 
   // Close dropdowns on outside click
   useEffect(() => {
@@ -38,7 +48,11 @@ export function AppLayout() {
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-[#e2e8f0]">
       <Sidebar
-        onOpenConfig={(page) => setConfigPage(configPage === page ? null : page)}
+        onOpenConfig={(page) => {
+          // 同一个条目（含它已切到的页）再点一次 = 收起浮层，不是跳回默认页
+          const entry = entryOf(page)
+          setConfigPage(configEntry && entry?.id === configEntry.id ? null : page)
+        }}
         onCloseConfig={() => setConfigPage(null)}
         activeConfig={configPage}
       />
@@ -61,15 +75,32 @@ export function AppLayout() {
               >
                 <svg className="w-4 h-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M10 3L5 8l5 5"/></svg>
               </button>
-              <h3 className="text-[17px] font-semibold text-[#0f172a] tracking-[-0.2px]">{CONFIG_TITLES[configPage]}</h3>
+              <h3 className="text-[17px] font-semibold text-[#0f172a] tracking-[-0.2px]">{configTitle}</h3>
+              {configTabs.length > 1 && (
+                <div className="flex gap-0.5 bg-[#f1f5f9] rounded-md p-0.5 ml-2">
+                  {configTabs.map((p) => (
+                    <button
+                      key={p}
+                      onClick={() => setConfigPage(p)}
+                      className={`px-[18px] py-[7px] rounded-[5px] text-[13px] font-medium transition-colors ${
+                        configPage === p ? 'bg-white text-[#0f172a] shadow-sm' : 'text-[#64748b] hover:text-[#0f172a] bg-transparent border-none cursor-pointer'
+                      }`}
+                    >
+                      {CONFIG_TITLES[p]}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
             <div className="flex-1 overflow-y-auto p-6">
               {configPage === 'skills' && <SkillsConfig />}
               {configPage === 'mcp' && <McpConfig />}
               {configPage === 'memory' && <MemoryConfig />}
               {configPage === 'expert' && <ExpertConfig onClose={() => setConfigPage(null)} />}
+              {configPage === 'user' && <UserConfig />}
               {configPage === 'rbac' && <RbacConfig />}
               {configPage === 'dept' && <DeptConfig />}
+              {configPage === 'model' && <ModelConfig />}
             </div>
           </div>
         )}

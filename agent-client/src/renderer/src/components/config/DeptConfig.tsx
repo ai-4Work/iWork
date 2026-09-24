@@ -6,6 +6,8 @@ import {
 } from '../../services/api'
 import { usePermi, useAuthStore } from '../../stores/authStore'
 import { showToast } from '../../utils/toast'
+import { buildDeptRows, deptLabel, type DeptRow } from './deptTree'
+import { CreateUserModal, UserDeptSelect, UserRoleSelect } from './UserForm'
 
 /** 默认部门的业务键。它不可删（服务端也拦），它是所有人的兜底归属。 */
 const DEFAULT_DEPT_KEY = 'default'
@@ -25,52 +27,20 @@ type Editing =
   | { mode: 'addChild'; parentId: number }
   | { mode: 'rename'; deptId: number }
 
-interface Row extends DeptNode {
-  depth: number
-  /** 自己 + 全部后代的 id */
-  subtree: number[]
-  /** 从根到这里（不含自己）的 id 链；任一祖先折叠了 => 本行不渲染 */
-  ancestors: number[]
-}
-
-/** 扁平部门表 → 深度优先的行序列（父行紧跟着它的子孙）。 */
-function buildRows(depts: DeptNode[]): Row[] {
-  const childrenOf = new Map<number, DeptNode[]>()
-  for (const d of depts) {
-    const list = childrenOf.get(d.parent_id) ?? []
-    list.push(d)
-    childrenOf.set(d.parent_id, list)
-  }
-  for (const list of childrenOf.values()) {
-    list.sort((a, b) => a.order_num - b.order_num || a.id - b.id)
-  }
-
-  const rows: Row[] = []
-  const walk = (parentId: number, depth: number, ancestors: number[]): number[] => {
-    const subtree: number[] = []
-    for (const d of childrenOf.get(parentId) ?? []) {
-      const row: Row = { ...d, depth, subtree: [], ancestors }
-      rows.push(row)
-      const kids = walk(d.id, depth + 1, [...ancestors, d.id])
-      row.subtree = [d.id, ...kids]
-      subtree.push(...row.subtree)
-    }
-    return subtree
-  }
-  walk(0, 0, [])
-  return rows
-}
-
 export function DeptConfig() {
-  const canAdd = usePermi('system:dept:add')
+  // 本页一个控件一个点（doc 19-4.2 表 29–36 行）：顶级与子部门是两点、同一支 API
+  const canAddRoot = usePermi('system:dept:addRoot')
+  const canAddChild = usePermi('system:dept:addChild')
   const canEdit = usePermi('system:dept:edit')
   const canRemove = usePermi('system:dept:remove')
   const canAssign = usePermi('system:dept:assign')
-  /** 建号（doc 19-4.2）：超管可任意部门、部门管理员只在本部门及下级，
-   *  这道范围由服务端判，前端只决定那个菜单项给不给看。 */
-  const canCreateUser = usePermi('system:user:add')
+  /** 建号（doc 19-4.2）：本页那个「添加用户」有自己的点，`system:user:add`
+   *  是用户管理页的「新增」——同一件事，两点任一即可。
+   *  超管可任意部门、部门管理员只在本部门及下级，这道范围由服务端判，
+   *  前端只决定那个菜单项给不给看。 */
+  const canCreateUser = usePermi(['system:dept:addUser', 'system:user:add'])
   /** 行尾「⋯」里有没有东西可放 —— 都没有就不给按钮（空菜单没意义） */
-  const hasRowActions = canAdd || canEdit || canRemove || canCreateUser
+  const hasRowActions = canAddChild || canEdit || canRemove || canCreateUser
 
   /** 角色列要读角色名，那要 `system:role:list` —— 和本页入口 `client:dept:config`
    *  不相干。没这个点就整列不渲染，并且**不能**去拉 `/role/list`（一拉就 403）。 */
@@ -154,7 +124,7 @@ export function DeptConfig() {
     }
   }
 
-  const rows = buildRows(depts)
+  const rows = buildDeptRows(depts)
   const deptById = new Map(depts.map((d) => [d.id, d]))
   const visibleRows = rows.filter((r) => r.ancestors.every((id) => expanded.has(id)))
   const unassigned = users.filter((u) => u.dept_id == null)
@@ -183,8 +153,8 @@ export function DeptConfig() {
     })
   }
 
-  /** 左树缩进用的名字；下拉里也用它，让层级看得出来。 */
-  const labelOf = (row: Row) => `${'　'.repeat(row.depth)}${row.dept_name}`
+  /** 挪部门下拉的选项。行序即深度优先序，缩进同左树。 */
+  const options = rows.map((row) => ({ id: row.id, label: deptLabel(row) }))
 
   const members =
     selected === 'unassigned'
@@ -257,7 +227,7 @@ export function DeptConfig() {
    *  操作挂在行上而不是右栏，就不用先选中父行才能给它加子部门。
    *  改名时整行换成输入框（缩进不动）。
    *  **整行可点即展开**：只有那个 4px 的三角能点太难点中，所以点行 = 选中 + 切展开。 */
-  const deptRow = (row: Row) => {
+  const deptRow = (row: DeptRow) => {
     const expandable = row.subtree.length > 1
     const total = subtreeCount.get(row.id) ?? 0
     const direct = directCount.get(row.id) ?? 0
@@ -377,15 +347,16 @@ export function DeptConfig() {
     }
   }
 
-  /** 建号。返回 false 时弹窗不关（见 `CreateUserModal`）—— 用户名被占、密码不合规
-   *  都能改一改再交；错误文案已由 `showToast` 给出。 */
+  /** 建号。返回 false 时弹窗不关（见 `CreateUserModal`）—— 用户名被占、密码不合规、
+   *  角色不可授都能改一改再交；错误文案已由 `showToast` 给出。 */
   const handleCreateUser = async (
     deptId: number,
     username: string,
     password: string,
+    roleId: number | null,
   ): Promise<boolean> => {
     try {
-      await createUser(username, password, deptId)
+      await createUser(username, password, deptId, roleId)
       showToast('已创建')
       await reloadUsers()
       // 新人不一定落在当前选中的部门，切过去更直观
@@ -447,7 +418,7 @@ export function DeptConfig() {
         <div className="w-[280px] min-w-[280px] flex flex-col border border-[#e2e8f0] rounded-lg bg-white overflow-hidden">
           <div className="flex items-center justify-between px-3 py-2 border-b border-[#e2e8f0] bg-[#f8fafc]">
             <span className="text-[12px] font-semibold text-[#334155]">部门</span>
-            {canAdd && (
+            {canAddRoot && (
               <button
                 onClick={startAddRoot}
                 disabled={busy}
@@ -512,32 +483,23 @@ export function DeptConfig() {
                       <span className="text-[11px] text-[#94a3b8] font-mono ml-2">{u.username}</span>
                     </td>
                     <td className="px-4 py-2 border-b border-[#f1f5f9]">
-                      <select
-                        value={u.dept_id ?? ''}
+                      <UserDeptSelect
+                        value={u.dept_id}
+                        options={options}
                         disabled={!canAssign}
-                        onChange={(e) => void handleMove(u.id, Number(e.target.value))}
-                        className="w-full text-[12px] border border-[#e2e8f0] rounded px-1.5 py-1 bg-white text-[#334155] cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        <option value="" disabled>未选择</option>
-                        {rows.map((r) => (
-                          <option key={r.id} value={r.id}>{labelOf(r)}</option>
-                        ))}
-                      </select>
+                        onChange={(deptId) => void handleMove(u.id, deptId)}
+                      />
                     </td>
                     {canSeeRoles && (
                       <td className="px-4 py-2 border-b border-[#f1f5f9]">
-                        <select
+                        <UserRoleSelect
                           // 单选只认第一个；服务端历史上可能挂过多个，这里只显示其中一个
-                          value={(u.role_ids ?? [])[0] ?? ''}
+                          value={(u.role_ids ?? [])[0] ?? null}
+                          roles={roles}
                           disabled={!canAssignRole || roleBusy === u.id}
-                          onChange={(e) => void handleRoleSet(u.id, Number(e.target.value))}
-                          className="w-full text-[12px] border border-[#e2e8f0] rounded px-1.5 py-1 bg-white text-[#334155] cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          <option value="" disabled>未选择</option>
-                          {roles.map((r) => (
-                            <option key={r.id} value={r.id}>{r.role_name}</option>
-                          ))}
-                        </select>
+                          // 没传 emptyLabel，空值项是禁着的 —— null 到不了这里，只为类型收敛
+                          onChange={(roleId) => { if (roleId !== null) void handleRoleSet(u.id, roleId) }}
+                        />
                       </td>
                     )}
                   </tr>
@@ -556,18 +518,24 @@ export function DeptConfig() {
       </div>
 
       {/* 只读管理员看得到页面，但一个写按钮都不该出现 */}
-      {!canAdd && !canEdit && !canRemove && !canAssign && !canCreateUser && (
+      {!canAddRoot && !canAddChild && !canEdit && !canRemove && !canAssign && !canCreateUser && (
         <div className="text-[12px] text-[#94a3b8]">
           你只能查看部门结构，没有增删改的权限点。
         </div>
       )}
 
-      {/* 「添加用户」弹窗。目标部门在菜单点开时就定下，弹窗里只读显示。 */}
+      {/* 「添加用户」弹窗。目标部门在菜单点开时就定下，弹窗里只读显示
+          —— 本页的部门由「在哪个部门上点的」决定，用户管理页才是自己挑。 */}
       {createDeptId !== null && (
         <CreateUserModal
-          deptName={deptById.get(createDeptId)?.dept_name ?? ''}
+          pick={{ lockedId: createDeptId, lockedName: deptById.get(createDeptId)?.dept_name ?? '' }}
+          // 角色那一项与用户管理页同一个条件：要挂角色得先看得见角色名
+          roles={canAssignRole && canSeeRoles ? roles : undefined}
           onClose={() => setCreateDeptId(null)}
-          onSubmit={(username, password) => handleCreateUser(createDeptId, username, password)}
+          onSubmit={
+            (username, password, deptId, roleId) =>
+              handleCreateUser(deptId, username, password, roleId)
+          }
         />
       )}
 
@@ -588,7 +556,7 @@ export function DeptConfig() {
               添加用户
             </div>
           )}
-          {canAdd && (
+          {canAddChild && (
             <div
               className="ctx-menu-item"
               onClick={() => { startAddChild(menu.deptId); setMenu(null) }}
@@ -621,105 +589,6 @@ export function DeptConfig() {
           )}
         </div>
       )}
-    </div>
-  )
-}
-
-/** 管理员建号弹窗。密码要当面转交给本人，所以带「显示」开关 —— 掩码下没法核对。 */
-function CreateUserModal({ deptName, onClose, onSubmit }: {
-  deptName: string
-  onClose: () => void
-  onSubmit: (username: string, password: string) => Promise<boolean>
-}) {
-  const [username, setUsername] = useState('')
-  const [password, setPassword] = useState('')
-  const [showPwd, setShowPwd] = useState(false)
-  const [submitting, setSubmitting] = useState(false)
-
-  const isValid = username.trim().length > 0 && password.length >= 8
-
-  const handleSubmit = async () => {
-    if (!isValid || submitting) return
-    setSubmitting(true)
-    try {
-      // 服务端拒了就把弹窗留着 —— 用户名被占、密码不合规都能改了再交
-      if (await onSubmit(username.trim(), password)) onClose()
-    } finally {
-      setSubmitting(false)
-    }
-  }
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20" onClick={onClose}>
-      <div
-        className="bg-white rounded-xl shadow-lg p-6 w-[420px]"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between">
-          <h3 className="text-[15px] font-semibold text-[#0f172a]">添加用户</h3>
-          <button onClick={onClose} className="text-[#94a3b8] hover:text-[#0f172a] cursor-pointer">
-            <svg className="w-4 h-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 4l8 8M12 4l-8 8"/></svg>
-          </button>
-        </div>
-        <p className="mt-1 mb-4 text-[12px] text-[#64748b]">
-          新账号会落在「{deptName}」，角色为普通用户，之后可在成员表里改。
-        </p>
-
-        <div className="space-y-3.5">
-          <div>
-            <label className="block text-[12px] font-medium text-[#64748b] mb-1">用户名 *</label>
-            <input
-              autoFocus
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              spellCheck={false}
-              placeholder="3–32 位小写字母、数字、_ 或 -"
-              className="w-full px-2.5 py-[7px] border border-[#e2e8f0] rounded-md text-[13px] outline-none focus:border-[#a7f3d0] placeholder:text-[#cbd5e1]"
-            />
-          </div>
-          <div>
-            <label className="block text-[12px] font-medium text-[#64748b] mb-1">密码 *</label>
-            <div className="flex items-center gap-2">
-              <input
-                type={showPwd ? 'text' : 'password'}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                autoComplete="new-password"
-                placeholder="至少 8 位"
-                className="flex-1 px-2.5 py-[7px] border border-[#e2e8f0] rounded-md text-[13px] outline-none focus:border-[#a7f3d0] placeholder:text-[#cbd5e1]"
-              />
-              <label className="flex items-center gap-1 text-[12px] text-[#64748b] cursor-pointer select-none whitespace-nowrap">
-                <input
-                  type="checkbox"
-                  checked={showPwd}
-                  onChange={(e) => setShowPwd(e.target.checked)}
-                />
-                显示
-              </label>
-            </div>
-          </div>
-        </div>
-
-        <div className="flex justify-end gap-2 mt-5">
-          <button
-            onClick={onClose}
-            className="px-4 py-1.5 rounded-md text-[13px] border border-[#e2e8f0] text-[#64748b] cursor-pointer hover:bg-[#f8fafc]"
-          >
-            取消
-          </button>
-          <button
-            onClick={() => void handleSubmit()}
-            disabled={!isValid || submitting}
-            className={`px-4 py-1.5 rounded-md text-[13px] font-medium cursor-pointer border ${
-              isValid && !submitting
-                ? 'border-[#a7f3d0] text-[#047857] bg-[#f0fdf4] hover:bg-[#a7f3d0]'
-                : 'border-[#e2e8f0] text-[#cbd5e1] bg-[#f8fafc] cursor-not-allowed'
-            }`}
-          >
-            {submitting ? '创建中…' : '确定'}
-          </button>
-        </div>
-      </div>
     </div>
   )
 }

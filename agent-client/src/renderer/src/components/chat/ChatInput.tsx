@@ -1,15 +1,22 @@
-import { useState, useRef, useCallback, useEffect } from 'react'
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import { useChatStore } from '../../stores/chatStore'
 import { useTaskStore } from '../../stores/taskStore'
 import { useModeStore } from '../../stores/modeStore'
 import { useQueueStore } from '../../stores/queueStore'
 import { useSettingsStore } from '../../stores/settingsStore'
+import { useConfigStore } from '../../stores/configStore'
 import { ipcClient } from '../../services/ipcClient'
 import { fetchInstalledSkills, cancelSession } from '../../services/api'
 import type { AppMode, InstalledSkill } from '../../types'
 
-const MODELS = ['deepseek-v4-pro']
+/** 后端模型清单拉不到时的兜底候选（未登录、接口挂了、首次加载还没回来）。
+ *
+ *  留一项而不是留空：下拉空着会让人以为"没有模型可选"，而实际上聊天是能用的 ——
+ *  后端在解析不到任何模型时会回落到 `.env` 里那个默认模型（见 `ModelResolver`）。
+ *  值必须与 `.env` 的 `IWORK_DEFAULT_MODEL` 同口径，否则选了它后端会打一条
+ *  `llm.unknown_model` 再回落，行为对但日志难看。 */
+const FALLBACK_MODELS = ['deepseek-v4-pro']
 
 interface SlashCommand {
   command: string
@@ -340,7 +347,19 @@ export function ChatInput({
   const saveSettings = useSettingsStore((s) => s.save)
   const effectiveWorkspace = workspacePathOverride ?? settings.workspacePath
   const effectiveModel = modelOverride ?? settings.model
-  const effectiveModels = modelsOverride ?? MODELS
+  const storeModels = useConfigStore((s) => s.models)
+  // 候选值一律是 `model_key`（发给后端的那个），标签另查 —— 下拉里显示 `display_name`，
+  // 用户不该看到 `deepseek-v4-pro` 这种内部标识。
+  const effectiveModels = useMemo(
+    () =>
+      modelsOverride ??
+      (storeModels.length > 0 ? storeModels.map((m) => m.model_key) : FALLBACK_MODELS),
+    [modelsOverride, storeModels]
+  )
+  const modelLabel = useCallback(
+    (key: string) => storeModels.find((m) => m.model_key === key)?.display_name ?? key,
+    [storeModels]
+  )
 
   const [wsDropdown, setWsDropdown] = useState(false)
   const [mdDropdown, setMdDropdown] = useState(false)
@@ -367,6 +386,16 @@ export function ChatInput({
 
   // Is the editor empty (no text and no chips)?
   const [isEmpty, setIsEmpty] = useState(true)
+
+  // 当前选中的模型不在候选里时，自动落到第一项：模型被删掉/停用，或 `settings.model`
+  // 是个历史遗留串（见 `types/index.ts` 的 `DEFAULT_SETTINGS.model`）。不这么做的话
+  // 下拉里**一项都不会打勾**，看着像"没选中任何模型"，而按钮上还挂着那个不存在的名字。
+  // 外部托管模型（`modelsOverride`，多智能体面板）时不碰全局设置 —— 那份状态归调用方。
+  useEffect(() => {
+    if (modelsOverride || effectiveModels.length === 0) return
+    if (effectiveModels.includes(settings.model)) return
+    saveSettings({ model: effectiveModels[0] })
+  }, [modelsOverride, effectiveModels, settings.model, saveSettings])
 
   // Detect @ mention in contenteditable
   useEffect(() => {
@@ -972,7 +1001,7 @@ export function ChatInput({
             <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="8" cy="8" r="3" /><path d="M13.5 8a5.5 5.5 0 00-11 0" />
             </svg>
-            <span className={`font-medium text-[#64748b] text-[11px] ${compact ? 'max-w-[90px] overflow-hidden text-ellipsis whitespace-nowrap' : ''}`}>{effectiveModel}</span>
+            <span className={`font-medium text-[#64748b] text-[11px] ${compact ? 'max-w-[90px] overflow-hidden text-ellipsis whitespace-nowrap' : ''}`} title={modelLabel(effectiveModel)}>{modelLabel(effectiveModel)}</span>
             <svg className="w-3.5 h-3.5 text-[#94a3b8]" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2.5">
               <path d="M5 7l3 3 3-3" />
             </svg>
@@ -984,7 +1013,7 @@ export function ChatInput({
                   className={`px-3 py-2 rounded-md text-[13px] cursor-pointer flex items-center gap-2 text-[#0f172a] hover:bg-[#f1f5f9] transition-colors ${effectiveModel === m ? 'bg-[#f0fdf4] text-[#047857] font-medium' : ''}`}
                 >
                   {effectiveModel === m && <span className="ml-auto text-[#a7f3d0] font-semibold">✓</span>}
-                  {m}
+                  {modelLabel(m)}
                 </div>
               ))}
             </PortalDropdown>

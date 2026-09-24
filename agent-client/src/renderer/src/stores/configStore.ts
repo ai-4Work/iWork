@@ -10,8 +10,10 @@ import {
   fetchL1Memories, deleteL1Memory,
   fetchL2Scenes, deleteL2Scene,
   fetchL3Personas, deleteL3Persona,
-  fetchRules, saveRule, deleteRuleApi
+  fetchRules, saveRule, deleteRuleApi,
+  fetchModelOptions
 } from '../services/api'
+import type { LlmModelOption } from '../services/api'
 import { ipcClient } from '../services/ipcClient'
 import { useSettingsStore } from './settingsStore'
 
@@ -193,6 +195,13 @@ interface ConfigState {
   loadRules: () => Promise<void>
   saveRuleAction: (req: { name: string; description: string; content: string; priority: number }) => Promise<void>
   deleteRuleAction: (id: string) => Promise<void>
+
+  /** 聊天下拉的模型候选。用户面接口 `GET /models`，只要求登录、不挂权限点。
+   *
+   *  放这里而不是 authStore：它是聊天的数据源，不是一个身份态。 */
+  models: LlmModelOption[]
+  modelsLoading: boolean
+  loadModels: () => Promise<void>
 }
 
 export const useConfigStore = create<ConfigState>((set, get) => ({
@@ -237,6 +246,10 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
   rules: [],
   rulesLoading: false,
   rulesError: null,
+
+  // 聊天下拉的模型候选
+  models: [],
+  modelsLoading: false,
 
   // Skills actions
   loadSkillHub: async () => {
@@ -713,5 +726,22 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
   deleteRuleAction: async (id) => {
     await deleteRuleApi(id)
     await get().loadRules()
+  },
+
+  /** 拉聊天下拉的模型候选。
+   *
+   *  **失败静默**：这个接口挂了不该在聊天界面上报错 —— 下拉会回退到内置的那条默认模型，
+   *  聊天本身还能继续（见 `ChatInput.tsx` 的 `MODELS` 兜底）。把错误留给日志，
+   *  别让一次网络抖动把整个输入框变成错误态。 */
+  loadModels: async () => {
+    const s = get()
+    if (s.modelsLoading) return
+    set({ modelsLoading: true })
+    try {
+      const data = await fetchModelOptions()
+      set({ models: data.models, modelsLoading: false })
+    } catch {
+      set({ modelsLoading: false })
+    }
   }
 }))

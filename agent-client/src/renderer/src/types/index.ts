@@ -121,7 +121,9 @@ export interface Settings {
 export const DEFAULT_SETTINGS: Settings = {
   apiBaseUrl: '',
   apiKey: '',
-  model: '/projects/data-report',
+  // 与主进程 `main/settings.ts` / `ipcClient.ts` 的默认值同口径。此前这里是个路径串，
+  // 两处不一致会让下拉的勾选状态取决于"渲染层还是主进程先落地"。
+  model: 'deepseek-v4-pro',
   workspacePath: '',
   fullAccess: false,
   mcpOverrides: {}
